@@ -4,6 +4,7 @@ from options.train_options import TrainOptions
 from data import create_dataset
 from models import create_model
 from util.visualizer import Visualizer
+from util.wandb_logger import WandbLogger
 
 
 if __name__ == '__main__':
@@ -15,7 +16,11 @@ if __name__ == '__main__':
     model = create_model(opt)      # create a model given opt.model and other options
     print('The number of training images = %d' % dataset_size)
 
-    visualizer = Visualizer(opt)   # create a visualizer that display/save images and plots
+    # Use wandb logger if specified, otherwise use traditional visualizer
+    if getattr(opt, 'use_wandb', False):
+        visualizer = WandbLogger(opt)
+    else:
+        visualizer = Visualizer(opt)
     opt.visualizer = visualizer
     total_iters = 0                # the total number of training iterations
 

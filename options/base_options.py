@@ -52,6 +52,7 @@ class BaseOptions():
         parser.add_argument('--tau', type=float, default=0.01, help='Entropy parameter')
         parser.add_argument('--no_antialias', action='store_true', help='if specified, use stride=2 convs instead of antialiased-downsampling (sad)')
         parser.add_argument('--no_antialias_up', action='store_true', help='if specified, use [upconv(learned filter)] instead of [upconv(hard-coded [1,3,3,1] filter), conv]')
+        parser.add_argument('--no_tanh', action='store_true', help='if specified, remove Tanh activation from generator output (for MRI data not in [-1,1] range)')
         # dataset parameters
         parser.add_argument('--dataset_mode', type=str, default='unaligned', help='chooses how datasets are loaded. [unaligned | aligned | single | colorization]')
         parser.add_argument('--direction', type=str, default='AtoB', help='AtoB or BtoA')
@@ -66,6 +67,10 @@ class BaseOptions():
         parser.add_argument('--display_winsize', type=int, default=256, help='display window size for both visdom and HTML')
         parser.add_argument('--random_scale_max', type=float, default=3.0,
                             help='(used for single image translation) Randomly scale the image by the specified factor as data augmentation.')
+        # wandb parameters
+        parser.add_argument('--use_wandb', action='store_true', help='if specified, use wandb for logging instead of visdom/HTML')
+        parser.add_argument('--wandb_project', type=str, default='mri-contrast-transfer', help='wandb project name')
+        parser.add_argument('--wandb_run_id', type=str, default=None, help='wandb run id for resuming')
         # additional parameters
         parser.add_argument('--epoch', type=str, default='latest', help='which epoch to load? set to latest to use latest cached model')
         parser.add_argument('--verbose', action='store_true', help='if specified, print more debugging information')
