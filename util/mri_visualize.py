@@ -17,8 +17,8 @@ def complex_to_magnitude_phase(tensor):
     if not isinstance(tensor, torch.Tensor):
         tensor = torch.from_numpy(tensor)
 
-    real = tensor[0].cpu().numpy()
-    imag = tensor[1].cpu().numpy()
+    real = tensor[0].detach().cpu().numpy()
+    imag = tensor[1].detach().cpu().numpy()
 
     magnitude = np.sqrt(real**2 + imag**2)
     phase = np.arctan2(imag, real)
@@ -112,10 +112,10 @@ def tensor_to_wandb_image(tensor, is_complex=False):
     else:
         # Magnitude representation or single channel
         if tensor.shape[0] == 1:
-            img = tensor[0].cpu().numpy()
+            img = tensor[0].detach().cpu().numpy()
         else:
             # If multi-channel but not complex, take first channel
-            img = tensor[0].cpu().numpy()
+            img = tensor[0].detach().cpu().numpy()
 
         img_display = normalize_for_display(img)
         img_rgb = np.stack([img_display] * 3, axis=-1)
