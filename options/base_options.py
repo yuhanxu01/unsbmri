@@ -36,13 +36,12 @@ class BaseOptions():
         parser.add_argument('--ndf', type=int, default=64, help='# of discrim filters in the first conv layer')
         parser.add_argument('--num_timesteps', type=int, default=5, help='# of discrim filters in the first conv layer')
         parser.add_argument('--embedding_dim', type=int, default=512, help='# of output image channels: 3 for RGB and 1 for grayscale')
-        parser.add_argument('--netD', type=str, default='basic_cond', choices=['basic', 'n_layers', 'pixel', 'patch', 'tilestylegan2', 'stylegan2'], help='specify discriminator architecture. The basic model is a 70x70 PatchGAN. n_layers allows you to specify the layers in the discriminator')
-        parser.add_argument('--netE', type=str, default='basic_cond', choices=['basic', 'n_layers', 'pixel', 'patch', 'tilestylegan2', 'stylegan2', 'patchstylegan2'], help='specify discriminator architecture. The basic model is a 70x70 PatchGAN. n_layers allows you to specify the layers in the discriminator')
-        parser.add_argument('--netG', type=str, default='resnet_9blocks_cond', choices=['resnet_9blocks', 'resnet_6blocks', 'unet_256', 'unet_128', 'stylegan2', 'smallstylegan2', 'resnet_cat'], help='specify generator architecture')
-        parser.add_argument('--embedding_type', type=str, default='positional', choices=['fourier', 'positional'], help='specify generator architecture')
-        parser.add_argument('--n_layers_D', type=int, default=3, help='only used if netD==n_layers')
-        parser.add_argument('--style_dim', type=int, default=512, help='only used if netD==n_layers')
-        parser.add_argument('--n_mlp', type=int, default=3, help='only used if netD==n_layers')
+        parser.add_argument('--netD', type=str, default='basic_cond', choices=['basic', 'n_layers', 'pixel', 'basic_cond'], help='specify discriminator architecture')
+        parser.add_argument('--netE', type=str, default='basic_cond', choices=['basic', 'n_layers', 'pixel', 'basic_cond'], help='specify energy network architecture')
+        parser.add_argument('--netG', type=str, default='resnet_9blocks_cond', choices=['resnet_9blocks', 'resnet_6blocks', 'unet_256', 'unet_128', 'resnet_9blocks_cond'], help='specify generator architecture')
+        parser.add_argument('--embedding_type', type=str, default='positional', choices=['fourier', 'positional'], help='time embedding type')
+        parser.add_argument('--n_layers_D', type=int, default=3, help='number of layers in discriminator')
+        parser.add_argument('--n_mlp', type=int, default=3, help='number of MLP layers for time embedding')
         parser.add_argument('--normG', type=str, default='instance', choices=['instance', 'batch', 'none'], help='instance normalization or batch normalization for G')
         parser.add_argument('--normD', type=str, default='instance', choices=['instance', 'batch', 'none'], help='instance normalization or batch normalization for D')
         parser.add_argument('--init_type', type=str, default='xavier', choices=['normal', 'xavier', 'kaiming', 'orthogonal'], help='network initialization')
@@ -67,19 +66,13 @@ class BaseOptions():
         parser.add_argument('--display_winsize', type=int, default=256, help='display window size for both visdom and HTML')
         parser.add_argument('--random_scale_max', type=float, default=3.0,
                             help='(used for single image translation) Randomly scale the image by the specified factor as data augmentation.')
-        # wandb parameters
-        parser.add_argument('--use_wandb', action='store_true', help='if specified, use wandb for logging instead of visdom/HTML')
+        # wandb parameters (required for logging)
         parser.add_argument('--wandb_project', type=str, default='mri-contrast-transfer', help='wandb project name')
         parser.add_argument('--wandb_run_id', type=str, default=None, help='wandb run id for resuming')
         # additional parameters
         parser.add_argument('--epoch', type=str, default='latest', help='which epoch to load? set to latest to use latest cached model')
         parser.add_argument('--verbose', action='store_true', help='if specified, print more debugging information')
         parser.add_argument('--suffix', default='', type=str, help='customized suffix: opt.name = opt.name + suffix: e.g., {model}_{netG}_size{load_size}')
-
-        # parameters related to StyleGAN2-based networks
-        parser.add_argument('--stylegan2_G_num_downsampling',
-                            default=1, type=int,
-                            help='Number of downsampling layers used by StyleGAN2Generator')
 
         self.initialized = True
         return parser

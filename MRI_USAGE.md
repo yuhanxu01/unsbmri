@@ -1,188 +1,155 @@
-# MRI Contrast Transfer - Usage Guide
+# UNSB for MRI Contrast Transfer
 
-This guide explains the MRI-specific modifications and how to use them for MRI contrast transfer tasks.
+Minimal implementation of UNSB (Unsupervised Score-Based) for MRI contrast transfer.
 
-## Key Modifications
+## Quick Start
 
-### 1. Per-Case Normalization
-
-**Why**: Natural images use fixed normalization (mean=0.5, std=0.5), but MRI data has different intensity ranges per case/sequence.
-
-**Options**:
-```bash
---mri_normalize_per_case       # Enable per-case normalization
---mri_normalize_method median   # Method: median (default) | percentile_95 | max
---mri_hard_normalize            # Force normalize to [-1,1] range after scaling
-```
-
-**How it works**:
-- Each H5 case computes its own normalization constant (e.g., median of magnitude across all slices)
-- Each slice is divided by this constant
-- At inference time, test cases use their own median (no dependency on training stats)
-
-### 2. Phase Alignment (Optional)
-
-**Why**: Unpaired MRI data may have arbitrary global phase offsets.
-
-**Option**:
-```bash
---mri_phase_align    # Enable global phase alignment between domain A and B
-```
-
-**Note**: Only useful for paired training or when A/B have meaningful phase relationship.
-
-### 3. Wandb Logging
-
-**Why**: HTML visualization doesn't support complex-valued MRI data well.
-
-**Options**:
-```bash
---use_wandb                          # Use wandb instead of HTML/Visdom
---wandb_project mri-contrast-transfer  # Wandb project name
---wandb_run_id <id>                  # Resume specific run
-```
-
-**Features**:
-- For `--mri_representation real_imag`: logs both magnitude and phase images
-- For `--mri_representation magnitude`: logs magnitude images
-- Automatic loss curves and training metrics
-
-### 4. Network Output Activation
-
-**Why**: Default Tanh clips output to [-1,1], but MRI data may be in [0, 1.4] range.
-
-**Option**:
-```bash
---no_tanh    # Remove Tanh from generator output layer
-```
-
-**When to use**:
-- Use `--no_tanh` if data is NOT normalized to [-1,1] (i.e., no `--mri_hard_normalize`)
-- Keep Tanh if using `--mri_hard_normalize`
-
-## Usage Examples
-
-### Example 1: Real/Imag Mode with Per-Case Normalization
-
+### Training
 ```bash
 python train.py \
-  --dataroot ./datasets/T1_to_T2 \
-  --name T1toT2_realimag \
+  --dataroot ./datasets/YOUR_DATA \
+  --name experiment_name \
   --dataset_mode mri_unaligned \
   --mri_representation real_imag \
   --mri_normalize_per_case \
-  --mri_normalize_method median \
-  --no_tanh \
-  --use_wandb \
-  --input_nc 2 \
-  --output_nc 2 \
-  --batch_size 4 \
-  --n_epochs 200 \
-  --n_epochs_decay 200
+  --wandb_project my-mri-project \
+  --batch_size 4
 ```
 
-**Explanation**:
-- Uses 2-channel real/imag representation
-- Each case normalized by its median
-- No Tanh (data in ~[0, 1.4] range)
-- Logs to wandb with magnitude+phase visualization
+### Testing
+```bash
+python test.py \
+  --dataroot ./datasets/YOUR_DATA \
+  --name experiment_name \
+  --dataset_mode mri_unaligned \
+  --mri_representation real_imag \
+  --mri_normalize_per_case \
+  --epoch latest
+```
 
-### Example 2: Magnitude Mode with Hard Normalization
+## MRI-Specific Options
 
+### Data Representation
+```bash
+--mri_representation real_imag  # 2-channel complex data (default)
+--mri_representation magnitude  # 1-channel magnitude only
+```
+
+### Normalization
+```bash
+--mri_normalize_per_case        # Per-case median normalization (recommended)
+--mri_normalize_method median   # median | percentile_95 | max
+--mri_hard_normalize            # Force to [-1,1] range
+```
+
+### Optional Features
+```bash
+--mri_phase_align              # Phase alignment (for paired data)
+--mri_crop_size 256            # Paired random crop
+--no_tanh                      # Remove Tanh from generator output
+```
+
+### Logging
+```bash
+--wandb_project PROJECT_NAME   # Wandb project (required)
+--wandb_run_id RUN_ID         # Resume specific run
+```
+
+## Network Architecture
+
+Available generators (`--netG`):
+- `resnet_9blocks_cond` - UNSB ResNet with time conditioning (default)
+- `resnet_9blocks` - Standard ResNet
+- `resnet_6blocks` - Lighter ResNet
+- `unet_256` / `unet_128` - UNet variants
+
+Available discriminators (`--netD`):
+- `basic_cond` - Conditional PatchGAN (default for UNSB)
+- `basic` - Standard PatchGAN
+- `n_layers` - Customizable depth PatchGAN
+- `pixel` - PixelGAN
+
+## Data Format
+
+HDF5 files with structure:
+```
+case001.h5
+  ├── slices_0: [H, W, 2]  # [real, imaginary]
+  ├── slices_1: [H, W, 2]
+  └── ...
+```
+
+Directory structure:
+```
+datasets/YOUR_DATA/
+  ├── trainA/
+  │   ├── case001.h5
+  │   └── case002.h5
+  ├── trainB/
+  │   ├── case001.h5
+  │   └── case002.h5
+  ├── testA/
+  └── testB/
+```
+
+## Common Configurations
+
+### Real/Imag with per-case normalization
 ```bash
 python train.py \
-  --dataroot ./datasets/PD_to_PDFS \
-  --name PDtoPDFS_mag \
-  --dataset_mode mri_unaligned \
+  --dataroot ./datasets/T1_T2 \
+  --name T1toT2 \
+  --mri_representation real_imag \
+  --mri_normalize_per_case \
+  --no_tanh \
+  --input_nc 2 --output_nc 2
+```
+
+### Magnitude with hard normalization
+```bash
+python train.py \
+  --dataroot ./datasets/PD_PDFS \
+  --name PDtoPDFS \
   --mri_representation magnitude \
   --mri_normalize_per_case \
   --mri_hard_normalize \
-  --use_wandb \
-  --input_nc 1 \
-  --output_nc 1 \
-  --batch_size 8 \
-  --n_epochs 200 \
-  --n_epochs_decay 200
+  --input_nc 1 --output_nc 1
 ```
 
-**Explanation**:
-- Uses 1-channel magnitude representation
-- Per-case median normalization + hard normalize to [-1,1]
-- Keeps Tanh (data in [-1,1] range)
+## Code Structure
 
-### Example 3: With Phase Alignment and Paired Training
-
-```bash
-python train.py \
-  --dataroot ./datasets/paired_T1_T2 \
-  --name T1toT2_paired \
-  --dataset_mode mri_unaligned \
-  --mri_representation real_imag \
-  --mri_normalize_per_case \
-  --mri_phase_align \
-  --paired_stage \
-  --no_tanh \
-  --use_wandb \
-  --input_nc 2 \
-  --output_nc 2
+```
+unsbmri/
+├── train.py              # Training script
+├── test.py               # Testing script
+├── data/
+│   ├── mri_unaligned_dataset.py  # MRI data loader
+│   └── base_dataset.py           # Dataset base class
+├── models/
+│   ├── sb_model.py              # UNSB model
+│   ├── networks.py              # Network definitions
+│   ├── ncsn_networks.py         # NCSN generator
+│   └── patchnce.py              # Contrastive loss
+├── util/
+│   ├── wandb_logger.py          # Wandb logging
+│   └── mri_visualize.py         # MRI visualization
+└── options/
+    ├── base_options.py
+    ├── train_options.py
+    └── test_options.py
 ```
 
-**Explanation**:
-- Paired training mode (requires matching case/slice names)
-- Phase alignment enabled (useful for paired data)
+## Key Changes from Original UNSB
 
-## Data Format Requirements
+1. **Removed**: HTML visualization, Visdom, StyleGAN networks
+2. **Simplified**: Only core UNSB components retained
+3. **Added**: Per-case normalization, wandb integration, MRI visualization
+4. **Modified**: Generator output (optional Tanh), data loading (H5 support)
 
-Your H5 files should contain:
-- Keys like `slices_0`, `slices_1`, ... (configurable with `--mri_slice_prefix`)
-- Each slice: shape `[H, W, 2]` where last dimension = [real, imaginary]
-- Directory structure:
-  ```
-  datasets/YourDataset/
-    trainA/
-      case001.h5
-      case002.h5
-    trainB/
-      case001.h5
-      case002.h5
-    testA/
-      ...
-    testB/
-      ...
-  ```
+## Tips
 
-## Recommendations
-
-### For Most MRI Tasks:
-```bash
---mri_representation real_imag      # Use complex data
---mri_normalize_per_case            # Per-case normalization
---mri_normalize_method median       # Robust to outliers
---no_tanh                           # Allow flexible output range
---use_wandb                         # Better visualization
-```
-
-### For Quick Experiments:
-```bash
---mri_representation magnitude      # Simpler (1 channel)
---mri_normalize_per_case
---mri_hard_normalize                # Normalize to [-1,1]
---use_wandb
-```
-
-## Debugging Tips
-
-1. **Check normalization constants**: They're printed during dataset initialization
-2. **Visualize first batch**: Use wandb to check if magnitude/phase look reasonable
-3. **Monitor loss scale**: If losses explode, try `--mri_hard_normalize`
-4. **Phase issues**: If using real_imag, try with/without `--mri_phase_align`
-
-## Migration from Natural Images
-
-Original code changes:
-- ✅ Removed: HTML visualization
-- ✅ Removed: Hard-coded `Normalize((0.5,), (0.5,))` from transforms
-- ✅ Removed: Fixed `*3000` scaling
-- ✅ Added: Per-case median normalization
-- ✅ Added: Optional Tanh removal
-- ✅ Added: MRI-specific wandb visualization
+1. **Start with per-case normalization**: `--mri_normalize_per_case --no_tanh`
+2. **Use wandb**: Provides magnitude + phase visualization for complex data
+3. **Adjust learning rate**: Default is 0.0002, may need tuning
+4. **Monitor losses**: Check that SB loss, NCE loss, and GAN loss are balanced
+5. **Phase alignment**: Only use with paired data or clear phase relationship
