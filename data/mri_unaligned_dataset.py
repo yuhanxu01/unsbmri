@@ -167,18 +167,25 @@ class MriUnalignedDataset(BaseDataset):
             A_path, A_key = self._paired_lookup_A[key_id]
             B_path, B_key = self._paired_lookup_B[key_id]
         else:
-            A_path, A_key = self.A_indices[index % self.A_size]
+            A_idx = index % self.A_size
+            A_path, A_key = self.A_indices[A_idx]
+
             if self.opt.serial_batches:
                 B_path, B_key = self.B_indices[index % self.B_size]
             else:
-                B_path, B_key = random.choice(self.B_indices)
+                # Select B from nearby slices (±2 from A index)
+                nearby_range = 2
+                B_start = max(0, A_idx - nearby_range)
+                B_end = min(self.B_size - 1, A_idx + nearby_range)
+                B_idx = random.randint(B_start, B_end)
+                B_path, B_key = self.B_indices[B_idx]
 
         A_tensor = self._load_slice(A_path, A_key, self.norm_constants_A)
         B_tensor = self._load_slice(B_path, B_key, self.norm_constants_B)
 
-        crop_size = getattr(self.opt, 'mri_crop_size', 0)
-        if crop_size and crop_size > 0:
-            A_tensor, B_tensor = self._paired_random_crop(A_tensor, B_tensor, crop_size)
+        # Apply center crop to 256x256
+        A_tensor = self._center_crop(A_tensor, 256)
+        B_tensor = self._center_crop(B_tensor, 256)
 
         if getattr(self.opt, 'paired_stage', False):
             case_token, slice_token = key_id.split('::', 1)
@@ -413,8 +420,28 @@ class MriUnalignedDataset(BaseDataset):
         
         # Stack back into tensor format
         B_tensor_aligned = torch.stack([B_real_aligned, B_imag_aligned], dim=0)
-        
+
         return A_tensor, B_tensor_aligned
+
+    def _center_crop(self, tensor: torch.Tensor, crop_size: int) -> torch.Tensor:
+        """Apply center crop to tensor.
+
+        Args:
+            tensor: [C, H, W] tensor
+            crop_size: target size
+
+        Returns:
+            Cropped tensor [C, crop_size, crop_size]
+        """
+        _, h, w = tensor.shape
+
+        if h < crop_size or w < crop_size:
+            raise ValueError(f'Cannot crop tensor of size {tensor.shape} to {crop_size}x{crop_size}')
+
+        top = (h - crop_size) // 2
+        left = (w - crop_size) // 2
+
+        return tensor[:, top:top + crop_size, left:left + crop_size]
 
     def _paired_random_crop(self, tensor_a: torch.Tensor, tensor_b: torch.Tensor, crop_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """Apply the same random crop to both tensors."""
