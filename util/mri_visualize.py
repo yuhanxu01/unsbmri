@@ -35,8 +35,8 @@ def prepare_image_for_logging(tensor: torch.Tensor, vmin_percentile: float = 1.0
             imag = tensor[1]
             magnitude = torch.sqrt(real**2 + imag**2)
         else:
-            # Single channel, just take absolute value
-            magnitude = tensor[0].abs() if tensor.shape[0] == 1 else tensor.abs()
+            # Single channel magnitude - do NOT take abs(), keep original values
+            magnitude = tensor[0] if tensor.shape[0] == 1 else tensor
 
     # Convert to numpy
     img = magnitude.numpy().astype(np.float32)
