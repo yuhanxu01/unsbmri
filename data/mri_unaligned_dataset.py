@@ -52,6 +52,11 @@ class MriUnalignedDataset(BaseDataset):
             help='If true, force normalize data to [-1,1] range after scaling'
         )
         parser.add_argument(
+            '--mri_normalize_per_slice',
+            action='store_true',
+            help='If true, normalize each slice by its own max (mimics PNG workflow: x/max -> [0,1] -> Normalize)'
+        )
+        parser.add_argument(
             '--mri_phase_align',
             action='store_true',
             help='If true, apply global phase alignment between A and B'
@@ -347,8 +352,17 @@ class MriUnalignedDataset(BaseDataset):
                 f'MRI slice {key} in {file_path} has dtype {tensor.dtype}; expected torch.float32 to match network weights without implicit casting.'
             )
 
-        # Apply per-case normalization if enabled
-        if getattr(self.opt, 'mri_normalize_per_case', False):
+        # Normalization strategy selection
+        if getattr(self.opt, 'mri_normalize_per_slice', False):
+            # Per-slice max normalization (mimics original PNG workflow)
+            # This is what you used before: img/max(img) -> [0,1] -> (x-0.5)/0.5 -> [-1,1]
+            tensor_max = tensor.max()
+            if tensor_max > 0:
+                tensor = tensor / tensor_max  # [0, 1]
+            tensor = (tensor - 0.5) / 0.5  # [-1, 1]
+
+        elif getattr(self.opt, 'mri_normalize_per_case', False):
+            # Per-case normalization (using median/percentile/max of entire case)
             if file_path in norm_constants:
                 tensor = tensor / norm_constants[file_path]
             # After per-case normalization, apply final normalization to [-1, 1]
@@ -362,9 +376,9 @@ class MriUnalignedDataset(BaseDataset):
             # This path should NOT be used - it's kept for backward compatibility
             tensor = tensor * 3000.0
 
-        # Apply hard normalization to [-1, 1] if requested
-        if getattr(self.opt, 'mri_hard_normalize', False):
-            # Per-slice normalization (NOT recommended - loses inter-slice intensity contrast)
+        # Apply hard normalization to [-1, 1] if requested (for per-case mode)
+        if getattr(self.opt, 'mri_hard_normalize', False) and not getattr(self.opt, 'mri_normalize_per_slice', False):
+            # Per-slice min-max normalization (NOT recommended - loses inter-slice intensity contrast)
             tensor_min = tensor.min()
             tensor_max = tensor.max()
             if tensor_max > tensor_min:

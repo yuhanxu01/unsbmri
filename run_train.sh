@@ -13,5 +13,4 @@
     --mode sb \
     --lambda_SB 1.0 \
     --lambda_NCE 1.0 \
-    --mri_normalize_per_case \
-    --mri_normalize_method median
+    --mri_normalize_per_slice
