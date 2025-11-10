@@ -351,13 +351,20 @@ class MriUnalignedDataset(BaseDataset):
         if getattr(self.opt, 'mri_normalize_per_case', False):
             if file_path in norm_constants:
                 tensor = tensor / norm_constants[file_path]
+            # After per-case normalization, apply final normalization to [-1, 1]
+            if not getattr(self.opt, 'mri_hard_normalize', False):
+                # Normalize to [-1, 1] (mimics Normalize((0.5,), (0.5,)) for images in [0,1])
+                # Assume tensor is roughly in [0, 1.5] after median normalization
+                tensor = torch.clamp(tensor, 0, 1)  # Clip to [0, 1]
+                tensor = (tensor - 0.5) / 0.5  # [-1, 1]
         else:
-            # Default: multiply by fixed constant
+            # Default: no per-case normalization (legacy behavior)
+            # This path should NOT be used - it's kept for backward compatibility
             tensor = tensor * 3000.0
 
         # Apply hard normalization to [-1, 1] if requested
         if getattr(self.opt, 'mri_hard_normalize', False):
-            # Normalize to [0, 1] first, then to [-1, 1]
+            # Per-slice normalization (NOT recommended - loses inter-slice intensity contrast)
             tensor_min = tensor.min()
             tensor_max = tensor.max()
             if tensor_max > tensor_min:
