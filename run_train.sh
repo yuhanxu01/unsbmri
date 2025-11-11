@@ -7,4 +7,10 @@
 #SBATCH --mem-per-cpu=4G
 #SBATCH --gres=gpu:1
 
-/gpfs/scratch/rl5285/miniconda3/envs/UNSB/bin/python3.8 train.py --dataroot ./datasets/PD2PDFS --name PD2PDFS --mode sb --lambda_SB 1.0 --lambda_NCE 1.0
+/gpfs/scratch/rl5285/miniconda3/envs/UNSB/bin/python3.8 train.py \
+    --dataroot ./datasets/PD2PDFS \
+    --name PD2PDFS \
+    --mode sb \
+    --lambda_SB 1.0 \
+    --lambda_NCE 1.0 \
+    --mri_normalize_per_slice

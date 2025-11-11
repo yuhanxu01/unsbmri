@@ -150,7 +150,6 @@ class SBModel(BaseModel):
             self.optimizer_F.step()       
         
     def set_input(self, input,input2=None):
-
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
         Parameters:
             input (dict): include the data itself and its metadata information.
@@ -162,7 +161,7 @@ class SBModel(BaseModel):
         if input2 is not None:
             self.real_A2 = input2['A' if AtoB else 'B'].to(self.device)
             self.real_B2 = input2['B' if AtoB else 'A'].to(self.device)
-        
+
         self.image_paths = input['A_paths' if AtoB else 'B_paths']
 
     def forward(self):

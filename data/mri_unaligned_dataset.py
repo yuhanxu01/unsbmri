@@ -34,6 +34,33 @@ class MriUnalignedDataset(BaseDataset):
             default='slices_',
             help='Prefix pattern used for slice keys inside each HDF5 file.'
         )
+        parser.add_argument(
+            '--mri_normalize_per_case',
+            action='store_true',
+            help='If true, normalize each case by its own median value'
+        )
+        parser.add_argument(
+            '--mri_normalize_method',
+            type=str,
+            default='median',
+            choices=['median', 'percentile_95', 'max'],
+            help='Method to compute normalization constant for each case'
+        )
+        parser.add_argument(
+            '--mri_hard_normalize',
+            action='store_true',
+            help='If true, force normalize data to [-1,1] range after scaling'
+        )
+        parser.add_argument(
+            '--mri_normalize_per_slice',
+            action='store_true',
+            help='If true, normalize each slice by its own max (mimics PNG workflow: x/max -> [0,1] -> Normalize)'
+        )
+        parser.add_argument(
+            '--mri_phase_align',
+            action='store_true',
+            help='If true, apply global phase alignment between A and B'
+        )
         parser.set_defaults(preprocess='none', no_flip=True, input_nc=2, output_nc=2)
         parser.add_argument('--mri_crop_size', type=int, default=0, help='if > 0, apply paired random crop of this size to MRI slices from both domains')
         return parser
@@ -69,8 +96,65 @@ class MriUnalignedDataset(BaseDataset):
             raise RuntimeError(f'No MRI slices found under {self.dir_A}. Ensure .h5 files contain keys starting with {self.slice_prefix}.')
         if self.B_size == 0:
             raise RuntimeError(f'No MRI slices found under {self.dir_B}. Ensure .h5 files contain keys starting with {self.slice_prefix}.')
+
+        # Compute per-case normalization constants if enabled
+        self.norm_constants_A = {}
+        self.norm_constants_B = {}
+        if getattr(self.opt, 'mri_normalize_per_case', False):
+            print('Computing per-case normalization constants...')
+            self.norm_constants_A = self._compute_normalization_constants(self.A_indices, 'A')
+            self.norm_constants_B = self._compute_normalization_constants(self.B_indices, 'B')
+            print(f'Computed normalization for {len(self.norm_constants_A)} cases in A, {len(self.norm_constants_B)} cases in B')
+
         if getattr(self.opt, 'paired_stage', False):
             self._initialize_paired_indices()
+
+    def _compute_normalization_constants(self, indices: List[SliceIndex], domain: str) -> dict:
+        """Compute normalization constant for each case (h5 file)."""
+        # Group slices by h5 file
+        case_slices = {}
+        for h5_path, slice_key in indices:
+            if h5_path not in case_slices:
+                case_slices[h5_path] = []
+            case_slices[h5_path].append(slice_key)
+
+        norm_constants = {}
+        method = self.opt.mri_normalize_method
+
+        for h5_path, slice_keys in case_slices.items():
+            magnitudes = []
+            with h5py.File(h5_path, 'r') as handle:
+                for key in slice_keys:
+                    data = handle[key][...]
+                    # Compute magnitude regardless of representation mode
+                    if data.shape[-1] >= 2:
+                        real = data[..., 0]
+                        imag = data[..., 1]
+                        mag = np.sqrt(real * real + imag * imag)
+                    else:
+                        mag = data[..., 0]
+                    magnitudes.append(mag.flatten())
+
+            # Concatenate all magnitude values from this case
+            all_mags = np.concatenate(magnitudes)
+
+            # Compute normalization constant based on method
+            if method == 'median':
+                norm_const = np.median(all_mags)
+            elif method == 'percentile_95':
+                norm_const = np.percentile(all_mags, 95)
+            elif method == 'max':
+                norm_const = np.max(all_mags)
+            else:
+                norm_const = 1.0
+
+            # Avoid division by zero
+            if norm_const < 1e-8:
+                norm_const = 1.0
+
+            norm_constants[h5_path] = norm_const
+
+        return norm_constants
 
     def __len__(self) -> int:
         if getattr(self.opt, 'paired_stage', False):
@@ -88,18 +172,25 @@ class MriUnalignedDataset(BaseDataset):
             A_path, A_key = self._paired_lookup_A[key_id]
             B_path, B_key = self._paired_lookup_B[key_id]
         else:
-            A_path, A_key = self.A_indices[index % self.A_size]
+            A_idx = index % self.A_size
+            A_path, A_key = self.A_indices[A_idx]
+
             if self.opt.serial_batches:
                 B_path, B_key = self.B_indices[index % self.B_size]
             else:
-                B_path, B_key = random.choice(self.B_indices)
+                # Select B from nearby slices (±2 from A index)
+                nearby_range = 2
+                B_start = max(0, A_idx - nearby_range)
+                B_end = min(self.B_size - 1, A_idx + nearby_range)
+                B_idx = random.randint(B_start, B_end)
+                B_path, B_key = self.B_indices[B_idx]
 
-        A_tensor = self._load_slice(A_path, A_key)
-        B_tensor = self._load_slice(B_path, B_key)
+        A_tensor = self._load_slice(A_path, A_key, self.norm_constants_A)
+        B_tensor = self._load_slice(B_path, B_key, self.norm_constants_B)
 
-        crop_size = getattr(self.opt, 'mri_crop_size', 0)
-        if crop_size and crop_size > 0:
-            A_tensor, B_tensor = self._paired_random_crop(A_tensor, B_tensor, crop_size)
+        # Apply center crop to 256x256
+        A_tensor = self._center_crop(A_tensor, 256)
+        B_tensor = self._center_crop(B_tensor, 256)
 
         if getattr(self.opt, 'paired_stage', False):
             case_token, slice_token = key_id.split('::', 1)
@@ -109,7 +200,10 @@ class MriUnalignedDataset(BaseDataset):
         else:
             a_path_label = f"{A_path}:{A_key}"
             b_path_label = f"{B_path}:{B_key}"
-        A_tensor, B_tensor = self._align_phase_global(A_tensor, B_tensor)
+
+        # Apply phase alignment only if enabled
+        if getattr(self.opt, 'mri_phase_align', False):
+            A_tensor, B_tensor = self._align_phase_global(A_tensor, B_tensor)
         return {
             'A': A_tensor,
             'B': B_tensor,
@@ -234,7 +328,7 @@ class MriUnalignedDataset(BaseDataset):
             for key in valid_keys:
                 slices.append((h5_path, key))
         return slices
-    def _load_slice(self, file_path: str, key: str) -> torch.Tensor:
+    def _load_slice(self, file_path: str, key: str, norm_constants: dict) -> torch.Tensor:
         with h5py.File(file_path, 'r') as handle:
             data = handle[key][...]
 
@@ -253,12 +347,43 @@ class MriUnalignedDataset(BaseDataset):
             magnitude = np.sqrt(real * real + imag * imag).astype(data.dtype, copy=False)
             tensor = torch.from_numpy(np.ascontiguousarray(magnitude[None, ...]))
 
-        tensor *= 3000
-        #tensor = torch.clamp(tensor, 0.0, 1.0)
         if tensor.dtype != torch.float32:
             raise TypeError(
                 f'MRI slice {key} in {file_path} has dtype {tensor.dtype}; expected torch.float32 to match network weights without implicit casting.'
             )
+
+        # Normalization strategy selection
+        if getattr(self.opt, 'mri_normalize_per_slice', False):
+            # Per-slice max normalization (mimics original PNG workflow)
+            # This is what you used before: img/max(img) -> [0,1] -> (x-0.5)/0.5 -> [-1,1]
+            tensor_max = tensor.max()
+            if tensor_max > 0:
+                tensor = tensor / tensor_max  # [0, 1]
+            tensor = (tensor - 0.5) / 0.5  # [-1, 1]
+
+        elif getattr(self.opt, 'mri_normalize_per_case', False):
+            # Per-case normalization (using median/percentile/max of entire case)
+            if file_path in norm_constants:
+                tensor = tensor / norm_constants[file_path]
+            # After per-case normalization, apply final normalization to [-1, 1]
+            if not getattr(self.opt, 'mri_hard_normalize', False):
+                # Normalize to [-1, 1] (mimics Normalize((0.5,), (0.5,)) for images in [0,1])
+                # Assume tensor is roughly in [0, 1.5] after median normalization
+                tensor = torch.clamp(tensor, 0, 1)  # Clip to [0, 1]
+                tensor = (tensor - 0.5) / 0.5  # [-1, 1]
+        else:
+            # Default: no per-case normalization (legacy behavior)
+            # This path should NOT be used - it's kept for backward compatibility
+            tensor = tensor * 3000.0
+
+        # Apply hard normalization to [-1, 1] if requested (for per-case mode)
+        if getattr(self.opt, 'mri_hard_normalize', False) and not getattr(self.opt, 'mri_normalize_per_slice', False):
+            # Per-slice min-max normalization (NOT recommended - loses inter-slice intensity contrast)
+            tensor_min = tensor.min()
+            tensor_max = tensor.max()
+            if tensor_max > tensor_min:
+                tensor = (tensor - tensor_min) / (tensor_max - tensor_min)  # [0, 1]
+                tensor = tensor * 2.0 - 1.0  # [-1, 1]
 
         return tensor
 
@@ -316,8 +441,28 @@ class MriUnalignedDataset(BaseDataset):
         
         # Stack back into tensor format
         B_tensor_aligned = torch.stack([B_real_aligned, B_imag_aligned], dim=0)
-        
+
         return A_tensor, B_tensor_aligned
+
+    def _center_crop(self, tensor: torch.Tensor, crop_size: int) -> torch.Tensor:
+        """Apply center crop to tensor.
+
+        Args:
+            tensor: [C, H, W] tensor
+            crop_size: target size
+
+        Returns:
+            Cropped tensor [C, crop_size, crop_size]
+        """
+        _, h, w = tensor.shape
+
+        if h < crop_size or w < crop_size:
+            raise ValueError(f'Cannot crop tensor of size {tensor.shape} to {crop_size}x{crop_size}')
+
+        top = (h - crop_size) // 2
+        left = (w - crop_size) // 2
+
+        return tensor[:, top:top + crop_size, left:left + crop_size]
 
     def _paired_random_crop(self, tensor_a: torch.Tensor, tensor_b: torch.Tensor, crop_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """Apply the same random crop to both tensors."""

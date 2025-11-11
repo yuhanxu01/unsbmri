@@ -353,7 +353,9 @@ class ResnetGenerator_ncsn(nn.Module):
                     nn.ReLU(True)]
         model_upsample += [nn.ReflectionPad2d(3)]
         model_upsample += [nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0)]
-        model_upsample += [nn.Tanh()]
+        # Add Tanh only if not disabled (for MRI data not in [-1,1] range)
+        if not getattr(opt, 'no_tanh', False):
+            model_upsample += [nn.Tanh()]
 
         self.model = nn.Sequential(*model)
         self.model_upsample = nn.Sequential(*model_upsample)
