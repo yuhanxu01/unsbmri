@@ -294,10 +294,17 @@ if __name__ == '__main__':
             model.test()
             visuals = model.get_current_visuals()
 
-            # Extract images
-            real_A = visuals['real_A'].squeeze(0)  # Remove batch dimension
-            fake_B = visuals['fake_B'].squeeze(0)
-            real_B = visuals['real_B'].squeeze(0)
+            # Extract images (UNSB uses different variable names in test mode)
+            # In test mode: visual_names = ['real', 'fake_1', 'fake_2', ..., 'fake_N']
+            real_A = visuals['real'].squeeze(0)  # Input image
+
+            # Get the final timestep output as the generated result
+            num_timesteps = opt.num_timesteps
+            fake_key = f'fake_{num_timesteps}'
+            fake_B = visuals[fake_key].squeeze(0)  # Generated output at final timestep
+
+            # Get ground truth from original data (not in visuals during test)
+            real_B = data['B'].squeeze(0)
 
             # Compute metrics
             metrics = compute_metrics(fake_B, real_B)
