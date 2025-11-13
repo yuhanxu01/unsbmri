@@ -52,6 +52,11 @@ class SBModel(BaseModel):
         # specify the training losses you want to print out.
         # The training/test scripts will call <BaseModel.get_current_losses>
         self.loss_names = ['G_GAN', 'D_real', 'D_fake', 'G', 'NCE','SB']
+
+        # Add L1 loss if enabled
+        if getattr(opt, 'lambda_L1', 0.0) > 0.0 and getattr(opt, 'paired_stage', False):
+            self.loss_names.append('L1')
+
         self.visual_names = ['real_A','real_A_noisy', 'fake_B', 'real_B']
         if self.opt.phase == 'test':
             self.visual_names = ['real']
@@ -88,6 +93,7 @@ class SBModel(BaseModel):
                 self.criterionNCE.append(PatchNCELoss(opt).to(self.device))
 
             self.criterionIdt = torch.nn.L1Loss().to(self.device)
+            self.criterionL1 = torch.nn.L1Loss().to(self.device)
             self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, opt.beta2))
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr, betas=(opt.beta1, opt.beta2))
             self.optimizer_E = torch.optim.Adam(self.netE.parameters(), lr=opt.lr, betas=(opt.beta1, opt.beta2))
@@ -325,8 +331,14 @@ class SBModel(BaseModel):
             loss_NCE_both = (self.loss_NCE + self.loss_NCE_Y) * 0.5
         else:
             loss_NCE_both = self.loss_NCE
-        
-        self.loss_G = self.loss_G_GAN + self.opt.lambda_SB*self.loss_SB + self.opt.lambda_NCE*loss_NCE_both
+
+        # Add L1 loss for paired training with ground truth
+        if getattr(self.opt, 'lambda_L1', 0.0) > 0.0 and getattr(self.opt, 'paired_stage', False):
+            self.loss_L1 = self.criterionL1(fake, self.real_B) * self.opt.lambda_L1
+        else:
+            self.loss_L1 = 0.0
+
+        self.loss_G = self.loss_G_GAN + self.opt.lambda_SB*self.loss_SB + self.opt.lambda_NCE*loss_NCE_both + self.loss_L1
         return self.loss_G
 
 
@@ -348,3 +360,92 @@ class SBModel(BaseModel):
             total_nce_loss += loss.mean()
 
         return total_nce_loss / n_layers
+
+    def compute_paired_metrics(self):
+        """Compute SSIM, PSNR, and NRMSE metrics between fake_B and real_B.
+
+        Only call this when paired_stage is enabled and we have ground truth.
+
+        Returns:
+            dict with keys 'ssim', 'psnr', 'nrmse', each containing the mean value across the batch
+        """
+        from skimage.metrics import structural_similarity as ssim
+        from skimage.metrics import peak_signal_noise_ratio as psnr
+        from skimage.metrics import normalized_root_mse as nrmse
+
+        if not hasattr(self, 'fake_B') or not hasattr(self, 'real_B'):
+            return {'ssim': 0.0, 'psnr': 0.0, 'nrmse': 0.0}
+
+        def tensor_to_numpy(tensor):
+            """Convert tensor to numpy array for metric computation."""
+            if isinstance(tensor, torch.Tensor):
+                img = tensor.detach().cpu().float().numpy()
+            else:
+                img = np.array(tensor)
+
+            # Handle different channel configurations
+            if img.ndim == 4:  # Batch dimension
+                return img
+            elif img.ndim == 3:
+                if img.shape[0] == 1:  # Single channel [1, H, W]
+                    img = img[0]
+                elif img.shape[0] == 2:  # Complex data [2, H, W] - convert to magnitude
+                    real, imag = img[0], img[1]
+                    img = np.sqrt(real * real + imag * imag)
+                else:  # Multi-channel
+                    img = img[0]  # Take first channel
+
+            return img
+
+        fake_B_np = tensor_to_numpy(self.fake_B)  # [B, C, H, W] or [B, H, W]
+        real_B_np = tensor_to_numpy(self.real_B)  # [B, C, H, W] or [B, H, W]
+
+        batch_size = fake_B_np.shape[0] if fake_B_np.ndim == 4 else 1
+
+        ssim_vals = []
+        psnr_vals = []
+        nrmse_vals = []
+
+        for i in range(batch_size):
+            # Extract single image from batch
+            if fake_B_np.ndim == 4:
+                fake_img = fake_B_np[i]
+                real_img = real_B_np[i]
+            else:
+                fake_img = fake_B_np
+                real_img = real_B_np
+
+            # Handle channel dimension
+            if fake_img.ndim == 3:
+                if fake_img.shape[0] == 1:  # [1, H, W]
+                    fake_img = fake_img[0]
+                    real_img = real_img[0]
+                elif fake_img.shape[0] == 2:  # Complex [2, H, W]
+                    fake_img = np.sqrt(fake_img[0]**2 + fake_img[1]**2)
+                    real_img = np.sqrt(real_img[0]**2 + real_img[1]**2)
+
+            # Compute data range
+            data_range = real_img.max() - real_img.min()
+            if data_range == 0:
+                data_range = 1.0
+
+            try:
+                ssim_val = ssim(real_img, fake_img, data_range=data_range)
+                psnr_val = psnr(real_img, fake_img, data_range=data_range)
+                nrmse_val = nrmse(real_img, fake_img, normalization='mean')
+
+                ssim_vals.append(float(ssim_val))
+                psnr_vals.append(float(psnr_val))
+                nrmse_vals.append(float(nrmse_val))
+            except Exception as e:
+                # If metric computation fails, use default values
+                print(f"Warning: Failed to compute metrics: {e}")
+                ssim_vals.append(0.0)
+                psnr_vals.append(0.0)
+                nrmse_vals.append(1.0)
+
+        return {
+            'ssim': float(np.mean(ssim_vals)),
+            'psnr': float(np.mean(psnr_vals)),
+            'nrmse': float(np.mean(nrmse_vals))
+        }

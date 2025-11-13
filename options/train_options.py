@@ -40,5 +40,12 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--lr_policy', type=str, default='linear', help='learning rate policy. [linear | step | plateau | cosine]')
         parser.add_argument('--lr_decay_iters', type=int, default=50, help='multiply by a gamma every lr_decay_iters iterations')
 
+        # Paired training parameters
+        parser.add_argument('--paired_stage', action='store_true', help='Enable paired training mode (requires matching A/B slices)')
+        parser.add_argument('--paired_subset_ratio', type=float, default=1.0, help='Ratio of paired data to use (0.0-1.0). For two-stage training, use 0.3 in stage 2')
+        parser.add_argument('--paired_subset_seed', type=int, default=42, help='Random seed for paired subset selection')
+        parser.add_argument('--lambda_L1', type=float, default=0.0, help='Weight for L1 loss in paired training (requires ground truth)')
+        parser.add_argument('--compute_paired_metrics', action='store_true', help='Compute and log SSIM/PSNR/NRMSE metrics during training (requires paired_stage)')
+
         self.isTrain = True
         return parser
