@@ -14,8 +14,9 @@
 STRATEGY_NAME=${1:-"schemeA"}
 STRATEGY_TYPE=${2:-"sb_gt_transport"}
 
-BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$BASE_DIR"
+# Change to the working directory
+BASE_DIR="/gpfs/scratch/rl5285/unsb_mri/unsbmri_2stage"
+cd "$BASE_DIR" || { echo "ERROR: Failed to cd to $BASE_DIR"; exit 1; }
 
 echo "=========================================="
 echo "SLURM Paired Training"
@@ -23,6 +24,7 @@ echo "=========================================="
 echo "Node: $SLURM_NODELIST"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Strategy: $STRATEGY_NAME ($STRATEGY_TYPE)"
+echo "Working Dir: $(pwd)"
 echo "=========================================="
 echo ""
 

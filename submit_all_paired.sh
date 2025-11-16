@@ -2,8 +2,9 @@
 # Batch submit all 7 paired training experiments to SLURM
 # Usage: bash submit_all_paired.sh
 
-BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$BASE_DIR"
+# Path to the SLURM script (in repo)
+SCRIPT_DIR="/home/user/unsbmri"
+SLURM_SCRIPT="${SCRIPT_DIR}/slurm_train_paired.sh"
 
 echo "=========================================="
 echo "Submitting 7 Paired Training Jobs"
@@ -30,7 +31,7 @@ for exp in "${experiments[@]}"; do
     IFS=':' read -r name strategy <<< "$exp"
 
     echo "Submitting: $name ($strategy)"
-    job_output=$(sbatch --job-name="paired_${name}" slurm_train_paired.sh "$name" "$strategy")
+    job_output=$(sbatch --job-name="paired_${name}" "$SLURM_SCRIPT" "$name" "$strategy")
     job_id=$(echo "$job_output" | grep -oP '\d+')
 
     if [ -n "$job_id" ]; then

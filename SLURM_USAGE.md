@@ -1,10 +1,20 @@
 # SLURM Training Guide
 
+## 重要说明
+
+**脚本位置**: `/home/user/unsbmri/`
+- `slurm_train_paired.sh` - SLURM任务脚本
+- `submit_all_paired.sh` - 批量提交脚本
+
+**工作目录**: `/gpfs/scratch/rl5285/unsb_mri/unsbmri_2stage`
+- SLURM任务会自动切换到此目录
+- 确保此目录下有 `run_train.sh`
+
 ## Quick Start
 
 ### 一次性提交所有7个实验
 ```bash
-bash submit_all_paired.sh
+bash /home/user/unsbmri/submit_all_paired.sh
 ```
 
 这会自动提交7个SLURM任务：
@@ -14,13 +24,13 @@ bash submit_all_paired.sh
 
 ### 单独提交实验
 ```bash
-sbatch slurm_train_paired.sh <实验名称> <策略类型>
+sbatch /home/user/unsbmri/slurm_train_paired.sh <实验名称> <策略类型>
 ```
 
 例如：
 ```bash
-sbatch slurm_train_paired.sh schemeA sb_gt_transport
-sbatch slurm_train_paired.sh B2 frequency
+sbatch /home/user/unsbmri/slurm_train_paired.sh schemeA sb_gt_transport
+sbatch /home/user/unsbmri/slurm_train_paired.sh B2 frequency
 ```
 
 ## 配置说明
