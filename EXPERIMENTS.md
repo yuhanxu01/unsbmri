@@ -16,28 +16,48 @@ Modular framework for testing strategies to utilize paired data in Schrödinger 
 | **B4** | `multiscale` | Multi-scale pyramid | `Σ w_i·‖pyramid_i(fake_B) - pyramid_i(real_B)‖` |
 | **B5** | `selfsup_contrast` | Self-supervised contrastive | `1 - cosine_sim(feat(fake_B), feat(real_B))` |
 
-## Batch Experiments (8 GPUs)
+## Experiment Setup (8 Total)
 
-### Quick Launch
+### Workflow
+```
+1. Unpaired baseline (200+200 epochs)  ← Already trained
+   └─ checkpoints/unpaired/
+
+2. 7 Paired strategies (100+100 epochs each, 10% data)
+   ├─ Scheme A: sb_gt_transport
+   ├─ Baseline L1: l1_loss
+   ├─ B1: nce_feature
+   ├─ B2: frequency
+   ├─ B3: gradient
+   ├─ B4: multiscale
+   └─ B5: selfsup_contrast
+```
+
+### Submit All 7 Jobs (Recommended)
 ```bash
-# Train all experiments in parallel
-sbatch experiments/slurm_launch_all.sh
-
-# Or without SLURM
-bash experiments/launch_all_8gpu.sh
+# Submit all 7 paired training jobs to SLURM
+bash submit_all_paired.sh
 ```
 
-### Experiment Matrix
+### Submit Individual Jobs
+```bash
+# Submit one at a time
+sbatch slurm_train_paired.sh schemeA sb_gt_transport
+sbatch slurm_train_paired.sh L1 l1_loss
+sbatch slurm_train_paired.sh B1 nce_feature
+sbatch slurm_train_paired.sh B2 frequency
+sbatch slurm_train_paired.sh B3 gradient
+sbatch slurm_train_paired.sh B4 multiscale
+sbatch slurm_train_paired.sh B5 selfsup_contrast
 ```
-8 experiments total (10% paired data for all):
-├─ Unpaired baseline (1x)
-├─ Scheme A (1x)
-├─ Baseline L1 (1x)
-├─ B1: NCE Feature (1x)
-├─ B2: Frequency (1x)
-├─ B3: Gradient (1x)
-├─ B4: Multiscale (1x)
-└─ B5: Contrastive (1x)
+
+### Monitor Jobs
+```bash
+# Check job status
+squeue -u $USER
+
+# View live logs
+tail -f slurm-<job_id>.out
 ```
 
 ### Testing & Evaluation
