@@ -21,7 +21,6 @@ EPOCH_COUNT=${EPOCH_COUNT:-1}
 LAMBDA_SB=${LAMBDA_SB:-1.0}
 LAMBDA_NCE=${LAMBDA_NCE:-1.0}
 LAMBDA_L1=${LAMBDA_L1:-0.0}
-LAMBDA_PERCEPTUAL=${LAMBDA_PERCEPTUAL:-0.0}
 
 # Paired training configuration
 PAIRED_STAGE=${PAIRED_STAGE:-""}  # Set to "--paired_stage" to enable
@@ -72,7 +71,6 @@ CMD="$PYTHON_BIN train.py \
   --lambda_SB $LAMBDA_SB \
   --lambda_NCE $LAMBDA_NCE \
   --lambda_L1 $LAMBDA_L1 \
-  --lambda_perceptual $LAMBDA_PERCEPTUAL \
   --paired_strategy $PAIRED_STRATEGY \
   --paired_subset_ratio $PAIRED_SUBSET_RATIO \
   --paired_subset_seed $PAIRED_SUBSET_SEED \
