@@ -53,9 +53,15 @@ class SBModel(BaseModel):
         # The training/test scripts will call <BaseModel.get_current_losses>
         self.loss_names = ['G_GAN', 'D_real', 'D_fake', 'G', 'NCE','SB']
 
-        # Add L1 loss if enabled
-        if getattr(opt, 'lambda_L1', 0.0) > 0.0 and getattr(opt, 'paired_stage', False):
-            self.loss_names.append('L1')
+        # Add strategy-specific losses
+        paired_strategy = getattr(opt, 'paired_strategy', 'none')
+        if getattr(opt, 'paired_stage', False):
+            if paired_strategy == 'sb_gt_transport':
+                self.loss_names.append('SB_guidance')  # Scheme A: GT guidance in SB framework
+            elif paired_strategy == 'l1_loss' and getattr(opt, 'lambda_L1', 0.0) > 0.0:
+                self.loss_names.append('L1')  # Baseline: simple L1
+            elif paired_strategy == 'regularization' and getattr(opt, 'lambda_perceptual', 0.0) > 0.0:
+                self.loss_names.append('perceptual')  # Scheme B: perceptual loss
 
         self.visual_names = ['real_A','real_A_noisy', 'fake_B', 'real_B']
         if self.opt.phase == 'test':
@@ -312,15 +318,25 @@ class SBModel(BaseModel):
         else:
             self.loss_G_GAN = 0.0
         self.loss_SB = 0
+        self.loss_SB_guidance = 0  # For scheme A
+
         if self.opt.lambda_SB > 0.0:
             XtXt_1 = torch.cat([self.real_A_noisy, self.fake_B], dim=1)
             XtXt_2 = torch.cat([self.real_A_noisy2, self.fake_B2], dim=1)
-            
+
             bs = self.opt.batch_size
 
             ET_XY    = self.netE(XtXt_1, self.time_idx, XtXt_1).mean() - torch.logsumexp(self.netE(XtXt_1, self.time_idx, XtXt_2).reshape(-1), dim=0)
             self.loss_SB = -(self.opt.num_timesteps-self.time_idx[0])/self.opt.num_timesteps*self.opt.tau*ET_XY
             self.loss_SB += self.opt.tau*torch.mean((self.real_A_noisy-self.fake_B)**2)
+
+            # Scheme A: Use GT to guide transport in SB framework
+            paired_strategy = getattr(self.opt, 'paired_strategy', 'none')
+            if getattr(self.opt, 'paired_stage', False) and paired_strategy == 'sb_gt_transport':
+                # Add GT guidance term in the form of transport cost
+                # This guides fake_B toward real_B while maintaining SB's mathematical structure
+                self.loss_SB_guidance = self.opt.tau * torch.mean((self.fake_B - self.real_B)**2)
+                self.loss_SB += self.loss_SB_guidance
         if self.opt.lambda_NCE > 0.0:
             self.loss_NCE = self.calculate_NCE_loss(self.real_A, fake)
         else:
@@ -332,13 +348,38 @@ class SBModel(BaseModel):
         else:
             loss_NCE_both = self.loss_NCE
 
-        # Add L1 loss for paired training with ground truth
-        if getattr(self.opt, 'lambda_L1', 0.0) > 0.0 and getattr(self.opt, 'paired_stage', False):
-            self.loss_L1 = self.criterionL1(fake, self.real_B) * self.opt.lambda_L1
-        else:
-            self.loss_L1 = 0.0
+        # Strategy-specific losses for paired training
+        paired_strategy = getattr(self.opt, 'paired_strategy', 'none')
+        extra_loss = 0.0
 
-        self.loss_G = self.loss_G_GAN + self.opt.lambda_SB*self.loss_SB + self.opt.lambda_NCE*loss_NCE_both + self.loss_L1
+        if getattr(self.opt, 'paired_stage', False):
+            if paired_strategy == 'sb_gt_transport':
+                # Scheme A: GT guidance already added to loss_SB above
+                pass  # No additional loss needed
+
+            elif paired_strategy == 'l1_loss':
+                # Baseline: Simple L1 loss
+                if getattr(self.opt, 'lambda_L1', 0.0) > 0.0:
+                    self.loss_L1 = self.criterionL1(fake, self.real_B) * self.opt.lambda_L1
+                    extra_loss += self.loss_L1
+                else:
+                    self.loss_L1 = 0.0
+
+            elif paired_strategy == 'regularization':
+                # Scheme B: Enhanced regularization (placeholder for future implementation)
+                if getattr(self.opt, 'lambda_perceptual', 0.0) > 0.0:
+                    # TODO: Implement perceptual loss
+                    self.loss_perceptual = 0.0  # Placeholder
+                    extra_loss += self.loss_perceptual
+                else:
+                    self.loss_perceptual = 0.0
+
+            elif paired_strategy == 'hybrid':
+                # Combination of multiple strategies
+                # Can be customized based on experimental needs
+                pass
+
+        self.loss_G = self.loss_G_GAN + self.opt.lambda_SB*self.loss_SB + self.opt.lambda_NCE*loss_NCE_both + extra_loss
         return self.loss_G
 
 

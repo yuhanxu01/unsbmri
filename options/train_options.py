@@ -44,8 +44,25 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--paired_stage', action='store_true', help='Enable paired training mode (requires matching A/B slices)')
         parser.add_argument('--paired_subset_ratio', type=float, default=1.0, help='Ratio of paired data to use (0.0-1.0). For two-stage training, use 0.3 in stage 2')
         parser.add_argument('--paired_subset_seed', type=int, default=42, help='Random seed for paired subset selection')
-        parser.add_argument('--lambda_L1', type=float, default=0.0, help='Weight for L1 loss in paired training (requires ground truth)')
         parser.add_argument('--compute_paired_metrics', action='store_true', help='Compute and log SSIM/PSNR/NRMSE metrics during training (requires paired_stage)')
+
+        # Paired training strategy (modular design for multiple schemes)
+        parser.add_argument('--paired_strategy', type=str, default='none',
+                          choices=['none', 'sb_gt_transport', 'l1_loss', 'regularization', 'weight_schedule', 'hybrid'],
+                          help='Strategy for using paired data:\n'
+                               '  none: No paired training (default unpaired)\n'
+                               '  sb_gt_transport: [Scheme A] Use GT in SB transport cost\n'
+                               '  l1_loss: [Baseline] Add simple L1 loss (naive approach)\n'
+                               '  regularization: [Scheme B] Enhanced regularization with paired data\n'
+                               '  weight_schedule: [Scheme D] Dynamic loss weight adjustment\n'
+                               '  hybrid: Combine multiple strategies')
+
+        # Strategy-specific parameters
+        parser.add_argument('--lambda_L1', type=float, default=0.0, help='[l1_loss strategy] Weight for L1 loss')
+        parser.add_argument('--lambda_perceptual', type=float, default=0.0, help='[regularization strategy] Weight for perceptual loss')
+        parser.add_argument('--sb_weight_schedule', type=str, default='constant', choices=['constant', 'linear', 'cosine'],
+                          help='[weight_schedule strategy] How to adjust lambda_SB over epochs')
+        parser.add_argument('--sb_weight_end', type=float, default=2.0, help='[weight_schedule strategy] Final lambda_SB value')
 
         self.isTrain = True
         return parser
