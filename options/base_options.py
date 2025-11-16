@@ -74,6 +74,79 @@ class BaseOptions():
         parser.add_argument('--verbose', action='store_true', help='if specified, print more debugging information')
         parser.add_argument('--suffix', default='', type=str, help='customized suffix: opt.name = opt.name + suffix: e.g., {model}_{netG}_size{load_size}')
 
+        # ========================================================================
+        # Noise-Adaptive Training Parameters (Nila + Di-Fusion Inspired)
+        # ========================================================================
+
+        # Nila-inspired parameters
+        parser.add_argument('--data_noise_level', type=float, default=0.0,
+                           help='Estimated noise level in the data (σ_y). '
+                                'Set to 0 to disable noise-adaptive loss (default). '
+                                'Use noise_estimation.py to estimate this value. '
+                                'Typical values: 0.01-0.05 for high quality, 0.05-0.10 for fast scans.')
+
+        parser.add_argument('--noise_adaptive_schedule', type=str, default='linear',
+                           choices=['linear', 'exponential', 'step', 'none'],
+                           help='Schedule for Nila-style noise-adaptive weight decay. '
+                                'linear: λ=ratio (recommended), '
+                                'exponential: λ=exp(-k*(1-ratio)), '
+                                'step: threshold-based, '
+                                'none: disable.')
+
+        parser.add_argument('--noise_adaptive_start_epoch', type=int, default=0,
+                           help='Start applying noise-adaptive loss after this epoch. '
+                                'Useful for curriculum learning (train normally first, then adapt).')
+
+        # Di-Fusion-inspired parameters
+        parser.add_argument('--latter_steps_ratio', type=float, default=1.0,
+                           help='Ratio of latter diffusion steps to train (Di-Fusion inspired). '
+                                '1.0 = train all steps (default UNSB), '
+                                '0.6 = train latter 60%% (recommended for denoising), '
+                                '0.3 = train latter 30%% (aggressive, for strong denoising). '
+                                'Focuses training on refinement rather than generation.')
+
+        parser.add_argument('--difusion_weight_schedule', type=str, default='none',
+                           choices=['linear', 'quadratic', 'exponential', 'none'],
+                           help='Di-Fusion inspired schedule for timestep-dependent SB weight. '
+                                'linear: 1-t/T (emphasize latter steps), '
+                                'quadratic: (1-t/T)^2 (more aggressive), '
+                                'exponential: exp(-2t/T) (smooth decay), '
+                                'none: uniform weight (default).')
+
+        parser.add_argument('--use_adaptive_sb_weight', action='store_true',
+                           help='Use combined Nila + Di-Fusion adaptive weighting for SB reconstruction loss. '
+                                'Combines noise-ratio weighting with timestep weighting.')
+
+        parser.add_argument('--continuous_time_sampling', action='store_true',
+                           help='Use continuous timestep sampling (Di-Fusion inspired). '
+                                'Samples alpha values continuously within [alpha_{t-1}, alpha_t] '
+                                'instead of discrete timesteps for smoother training.')
+
+        # Data augmentation for denoising
+        parser.add_argument('--denoise_augmentation', action='store_true',
+                           help='Apply denoising data augmentation to target domain B. '
+                                'Generates pseudo-clean samples to guide discriminator toward cleaner outputs.')
+
+        parser.add_argument('--denoise_method', type=str, default='lowpass',
+                           choices=['lowpass', 'wavelet', 'bilateral', 'nlm'],
+                           help='Method for denoising augmentation. '
+                                'lowpass: Gaussian low-pass filter (fast), '
+                                'wavelet: Wavelet soft-thresholding (better), '
+                                'bilateral: Edge-preserving bilateral filter, '
+                                'nlm: Non-local means (slow but best).')
+
+        parser.add_argument('--denoise_prob', type=float, default=0.5,
+                           help='Probability of applying denoising augmentation to each sample. '
+                                '0.5 = 50%% clean, 50%% original (recommended).')
+
+        parser.add_argument('--denoise_sigma', type=float, default=1.5,
+                           help='Sigma parameter for denoising methods (controls smoothing strength).')
+
+        # Visualization and monitoring
+        parser.add_argument('--visualize_noise_schedule', action='store_true',
+                           help='Visualize the noise-adaptive schedule at start of training. '
+                                'Generates a plot showing how weights change with timesteps.')
+
         self.initialized = True
         return parser
 
