@@ -1,6 +1,6 @@
 #!/bin/bash
 # Test all trained models and find the optimal strategy
-# This script evaluates all experiments on the same test set
+# All paired experiments use 10% data
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$BASE_DIR"
@@ -13,7 +13,7 @@ RESULTS_DIR="test_results"
 mkdir -p "$RESULTS_DIR"
 
 echo "=========================================="
-echo "Testing All Experiments"
+echo "Testing All Experiments (10% paired data)"
 echo "=========================================="
 echo "Results will be saved to: $RESULTS_DIR"
 echo ""
@@ -54,48 +54,24 @@ test_model() {
 
 # Initialize summary file
 echo "Experiment Comparison Summary" > "$RESULTS_DIR/summary.txt"
+echo "All paired experiments use 10% data" >> "$RESULTS_DIR/summary.txt"
 echo "========================================" >> "$RESULTS_DIR/summary.txt"
 echo "" >> "$RESULTS_DIR/summary.txt"
 
 # Test baseline (unpaired only)
 echo "Testing unpaired baseline..."
-test_model "shared_baseline" "unpaired" 0 &
-pid_baseline=$!
+test_model "baseline" "unpaired" 0 &
 
-# Test all paired experiments in parallel (use 17 GPUs)
+# Test all paired experiments in parallel (7 GPUs)
 echo "Testing paired experiments in parallel..."
 
-# Scheme A
-test_model "shared_baseline" "A_30" 0 &
-test_model "shared_baseline" "A_50" 1 &
-test_model "shared_baseline" "A_100" 2 &
-
-# L1 Baseline
-test_model "shared_baseline" "L1_30" 3 &
-test_model "shared_baseline" "L1_50" 4 &
-test_model "shared_baseline" "L1_100" 5 &
-
-# B1
-test_model "shared_baseline" "B1_30" 6 &
-test_model "shared_baseline" "B1_50" 7 &
-test_model "shared_baseline" "B1_100" 8 &
-
-# B2
-test_model "shared_baseline" "B2_30" 9 &
-test_model "shared_baseline" "B2_100" 10 &
-
-# B3
-test_model "shared_baseline" "B3_30" 11 &
-test_model "shared_baseline" "B3_50" 12 &
-test_model "shared_baseline" "B3_100" 13 &
-
-# B4
-test_model "shared_baseline" "B4_30" 14 &
-test_model "shared_baseline" "B4_100" 15 &
-
-# B5
-test_model "shared_baseline" "B5_30" 16 &
-test_model "shared_baseline" "B5_100" 17 &
+test_model "baseline" "schemeA" 0 &
+test_model "baseline" "L1" 1 &
+test_model "baseline" "B1" 2 &
+test_model "baseline" "B2" 3 &
+test_model "baseline" "B3" 4 &
+test_model "baseline" "B4" 5 &
+test_model "baseline" "B5" 6 &
 
 # Wait for all tests to complete
 echo "Waiting for all tests to complete..."
@@ -130,14 +106,8 @@ for exp_dir in os.listdir(results_dir):
     with open(metrics_file, 'r') as f:
         content = f.read()
 
-    # Extract experiment info
-    parts = exp_dir.replace("shared_baseline_", "").split("_")
-    if len(parts) == 1:
-        strategy = parts[0]
-        ratio = "N/A"
-    else:
-        strategy = "_".join(parts[:-1])
-        ratio = parts[-1]
+    # Extract strategy name
+    strategy = exp_dir.replace("baseline_", "")
 
     # Extract metrics
     ssim_match = re.search(r'SSIM:\s+([\d.]+)', content)
@@ -147,7 +117,6 @@ for exp_dir in os.listdir(results_dir):
     if ssim_match and psnr_match and nrmse_match:
         data.append({
             'Strategy': strategy,
-            'Data Ratio': ratio,
             'SSIM': float(ssim_match.group(1)),
             'PSNR (dB)': float(psnr_match.group(1)),
             'NRMSE': float(nrmse_match.group(1))
@@ -155,7 +124,7 @@ for exp_dir in os.listdir(results_dir):
 
 # Create DataFrame
 df = pd.DataFrame(data)
-df = df.sort_values(['Strategy', 'Data Ratio'])
+df = df.sort_values('SSIM', ascending=False)
 
 # Save to CSV
 csv_file = os.path.join(results_dir, "comparison_table.csv")
@@ -164,43 +133,28 @@ print(f"Saved to: {csv_file}")
 
 # Print table
 print("\n" + "="*80)
-print("EXPERIMENT COMPARISON TABLE")
+print("EXPERIMENT COMPARISON (10% Paired Data)")
 print("="*80)
 print(df.to_string(index=False))
 print("="*80)
 
 # Find best models
-print("\nBEST MODELS BY METRIC:")
+print("\nBEST STRATEGY BY METRIC:")
 print("-"*80)
 best_ssim = df.loc[df['SSIM'].idxmax()]
 best_psnr = df.loc[df['PSNR (dB)'].idxmax()]
 best_nrmse = df.loc[df['NRMSE'].idxmin()]
 
-print(f"Best SSIM:  {best_ssim['Strategy']:20s} {best_ssim['Data Ratio']:5s} -> {best_ssim['SSIM']:.4f}")
-print(f"Best PSNR:  {best_psnr['Strategy']:20s} {best_psnr['Data Ratio']:5s} -> {best_psnr['PSNR (dB)']:.2f} dB")
-print(f"Best NRMSE: {best_nrmse['Strategy']:20s} {best_nrmse['Data Ratio']:5s} -> {best_nrmse['NRMSE']:.4f}")
+print(f"Best SSIM:  {best_ssim['Strategy']:20s} -> {best_ssim['SSIM']:.4f}")
+print(f"Best PSNR:  {best_psnr['Strategy']:20s} -> {best_psnr['PSNR (dB)']:.2f} dB")
+print(f"Best NRMSE: {best_nrmse['Strategy']:20s} -> {best_nrmse['NRMSE']:.4f}")
 print("="*80)
 
-# Analyze by data ratio
-print("\nAVERAGE PERFORMANCE BY DATA RATIO:")
+# Rank strategies
+print("\nSTRATEGY RANKING (by SSIM):")
 print("-"*80)
-ratio_stats = df.groupby('Data Ratio').agg({
-    'SSIM': 'mean',
-    'PSNR (dB)': 'mean',
-    'NRMSE': 'mean'
-}).round(4)
-print(ratio_stats)
-print("")
-
-# Analyze by strategy
-print("AVERAGE PERFORMANCE BY STRATEGY:")
-print("-"*80)
-strategy_stats = df.groupby('Strategy').agg({
-    'SSIM': 'mean',
-    'PSNR (dB)': 'mean',
-    'NRMSE': 'mean'
-}).round(4)
-print(strategy_stats.sort_values('SSIM', ascending=False))
+for i, row in df.iterrows():
+    print(f"{row['Strategy']:20s}  SSIM: {row['SSIM']:.4f}  PSNR: {row['PSNR (dB)']:5.2f}  NRMSE: {row['NRMSE']:.4f}")
 print("="*80)
 
 EOF
