@@ -48,21 +48,21 @@ class TrainOptions(BaseOptions):
 
         # Paired training strategy (modular design for multiple schemes)
         parser.add_argument('--paired_strategy', type=str, default='none',
-                          choices=['none', 'sb_gt_transport', 'l1_loss', 'regularization', 'weight_schedule', 'hybrid'],
+                          choices=['none', 'sb_gt_transport', 'l1_loss', 'nce_feature', 'frequency', 'gradient', 'multiscale', 'selfsup_contrast', 'hybrid'],
                           help='Strategy for using paired data:\n'
                                '  none: No paired training (default unpaired)\n'
                                '  sb_gt_transport: [Scheme A] Use GT in SB transport cost\n'
-                               '  l1_loss: [Baseline] Add simple L1 loss (naive approach)\n'
-                               '  regularization: [Scheme B] Enhanced regularization with paired data\n'
-                               '  weight_schedule: [Scheme D] Dynamic loss weight adjustment\n'
+                               '  l1_loss: [Baseline] Add simple L1 loss\n'
+                               '  nce_feature: [B1] Enhanced NCE in feature space\n'
+                               '  frequency: [B2] Frequency domain (FFT) loss\n'
+                               '  gradient: [B3] Gradient/structure loss\n'
+                               '  multiscale: [B4] Multi-scale pyramid loss\n'
+                               '  selfsup_contrast: [B5] Self-supervised contrastive\n'
                                '  hybrid: Combine multiple strategies')
 
         # Strategy-specific parameters
-        parser.add_argument('--lambda_L1', type=float, default=0.0, help='[l1_loss strategy] Weight for L1 loss')
-        parser.add_argument('--lambda_perceptual', type=float, default=0.0, help='[regularization strategy] Weight for perceptual loss')
-        parser.add_argument('--sb_weight_schedule', type=str, default='constant', choices=['constant', 'linear', 'cosine'],
-                          help='[weight_schedule strategy] How to adjust lambda_SB over epochs')
-        parser.add_argument('--sb_weight_end', type=float, default=2.0, help='[weight_schedule strategy] Final lambda_SB value')
+        parser.add_argument('--lambda_L1', type=float, default=1.0, help='[l1_loss] Weight for L1 loss')
+        parser.add_argument('--lambda_reg', type=float, default=1.0, help='[B1-B5] Weight for regularization losses')
 
         self.isTrain = True
         return parser
