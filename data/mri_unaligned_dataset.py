@@ -1,6 +1,7 @@
 import os
 import random
 import re
+import time
 from pathlib import Path
 from typing import List, Tuple
 
@@ -123,17 +124,17 @@ class MriUnalignedDataset(BaseDataset):
 
         for h5_path, slice_keys in case_slices.items():
             magnitudes = []
-            with h5py.File(h5_path, 'r') as handle:
-                for key in slice_keys:
-                    data = handle[key][...]
-                    # Compute magnitude regardless of representation mode
-                    if data.shape[-1] >= 2:
-                        real = data[..., 0]
-                        imag = data[..., 1]
-                        mag = np.sqrt(real * real + imag * imag)
-                    else:
-                        mag = data[..., 0]
-                    magnitudes.append(mag.flatten())
+            for key in slice_keys:
+                # Use safe reading method
+                data = self._safe_h5_read(h5_path, key)
+                # Compute magnitude regardless of representation mode
+                if data.shape[-1] >= 2:
+                    real = data[..., 0]
+                    imag = data[..., 1]
+                    mag = np.sqrt(real * real + imag * imag)
+                else:
+                    mag = data[..., 0]
+                magnitudes.append(mag.flatten())
 
             # Concatenate all magnitude values from this case
             all_mags = np.concatenate(magnitudes)
@@ -310,9 +311,51 @@ class MriUnalignedDataset(BaseDataset):
                 indices.extend(self._list_slices(path))
         indices.sort()
         return indices
+    def _safe_h5_read(self, h5_path: str, key: str, max_retries: int = 5):
+        """
+        Safely read data from HDF5 file with retry logic.
+
+        Args:
+            h5_path: Path to HDF5 file
+            key: Dataset key to read
+            max_retries: Maximum number of retry attempts
+
+        Returns:
+            Numpy array with the data
+        """
+        for attempt in range(max_retries):
+            try:
+                # Use locking=False and explicitly set file driver to avoid file locking issues
+                # in multi-process environments
+                with h5py.File(h5_path, 'r', libver='latest', locking=False) as handle:
+                    # Read the data into memory immediately
+                    data = handle[key][...]
+                return data
+            except OSError as e:
+                if 'inflate' in str(e).lower() or 'synchronously read' in str(e).lower():
+                    if attempt < max_retries - 1:
+                        # Exponential backoff: 0.1s, 0.2s, 0.4s, 0.8s
+                        wait_time = 0.1 * (2 ** attempt)
+                        warnings.warn(
+                            f"HDF5 read error for {os.path.basename(h5_path)}:{key} "
+                            f"(attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s... "
+                            f"Error: {str(e)}"
+                        )
+                        time.sleep(wait_time)
+                    else:
+                        raise OSError(
+                            f"Failed to read {h5_path}:{key} after {max_retries} attempts. "
+                            f"The file may be corrupted or there may be filesystem issues. "
+                            f"Original error: {str(e)}"
+                        ) from e
+                else:
+                    # For other OSErrors, raise immediately
+                    raise
+
     def _list_slices(self, h5_path: str) -> List[SliceIndex]:
         slices: List[SliceIndex] = []
-        with h5py.File(h5_path, 'r') as handle:
+        # Use locking=False for reading file metadata
+        with h5py.File(h5_path, 'r', libver='latest', locking=False) as handle:
             valid_keys = [
                 key for key in sorted(handle.keys())
                 if key.startswith(self.slice_prefix)
@@ -324,13 +367,13 @@ class MriUnalignedDataset(BaseDataset):
                 valid_keys = valid_keys[5:-5]
             else:
                 warnings.warn(f"File {os.path.basename(h5_path)} has only {len(valid_keys)} slices; skipping exclusion.")
-            
+
             for key in valid_keys:
                 slices.append((h5_path, key))
         return slices
     def _load_slice(self, file_path: str, key: str, norm_constants: dict) -> torch.Tensor:
-        with h5py.File(file_path, 'r') as handle:
-            data = handle[key][...]
+        # Use safe reading method with retry logic
+        data = self._safe_h5_read(file_path, key)
 
         if data.ndim != 3:
             raise ValueError(f'Slice {key} in {file_path} has unexpected ndim {data.ndim}; expected 3.')
