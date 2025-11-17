@@ -37,8 +37,8 @@ export EXPERIMENT_NAME="baseline"
 export STAGE_NAME="$STRATEGY_NAME"
 
 # Training parameters
-export N_EPOCHS=100
-export N_EPOCHS_DECAY=100
+export N_EPOCHS=500        # Constant LR until epoch 500 (401-500 = 100 epochs)
+export N_EPOCHS_DECAY=100  # Decay for 100 more epochs (501-600)
 export BATCH_SIZE=1
 
 # Paired training configuration
@@ -58,7 +58,7 @@ echo "Configuration:"
 echo "  Pretrained: checkpoints/unpaired"
 echo "  Output: checkpoints/baseline_${STRATEGY_NAME}"
 echo "  Paired data: 10%"
-echo "  Epochs: 100+100 (continue from 401)"
+echo "  Epochs: 401-500 (constant LR) + 501-600 (decay)"
 echo ""
 
 # Run training
