@@ -52,6 +52,25 @@ class SBModel(BaseModel):
         # specify the training losses you want to print out.
         # The training/test scripts will call <BaseModel.get_current_losses>
         self.loss_names = ['G_GAN', 'D_real', 'D_fake', 'G', 'NCE','SB']
+
+        # Add strategy-specific losses
+        paired_strategy = getattr(opt, 'paired_strategy', 'none')
+        if getattr(opt, 'paired_stage', False):
+            if paired_strategy == 'sb_gt_transport':
+                self.loss_names.append('SB_guidance')  # Scheme A
+            elif paired_strategy == 'l1_loss':
+                self.loss_names.append('L1')  # Baseline
+            elif paired_strategy == 'nce_feature':
+                self.loss_names.append('NCE_paired')  # B1
+            elif paired_strategy == 'frequency':
+                self.loss_names.append('freq')  # B2
+            elif paired_strategy == 'gradient':
+                self.loss_names.append('gradient')  # B3
+            elif paired_strategy == 'multiscale':
+                self.loss_names.append('multiscale')  # B4
+            elif paired_strategy == 'selfsup_contrast':
+                self.loss_names.append('contrast')  # B5
+
         self.visual_names = ['real_A','real_A_noisy', 'fake_B', 'real_B']
         if self.opt.phase == 'test':
             self.visual_names = ['real']
@@ -88,6 +107,7 @@ class SBModel(BaseModel):
                 self.criterionNCE.append(PatchNCELoss(opt).to(self.device))
 
             self.criterionIdt = torch.nn.L1Loss().to(self.device)
+            self.criterionL1 = torch.nn.L1Loss().to(self.device)
             self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, opt.beta2))
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr, betas=(opt.beta1, opt.beta2))
             self.optimizer_E = torch.optim.Adam(self.netE.parameters(), lr=opt.lr, betas=(opt.beta1, opt.beta2))
@@ -306,15 +326,25 @@ class SBModel(BaseModel):
         else:
             self.loss_G_GAN = 0.0
         self.loss_SB = 0
+        self.loss_SB_guidance = 0  # For scheme A
+
         if self.opt.lambda_SB > 0.0:
             XtXt_1 = torch.cat([self.real_A_noisy, self.fake_B], dim=1)
             XtXt_2 = torch.cat([self.real_A_noisy2, self.fake_B2], dim=1)
-            
+
             bs = self.opt.batch_size
 
             ET_XY    = self.netE(XtXt_1, self.time_idx, XtXt_1).mean() - torch.logsumexp(self.netE(XtXt_1, self.time_idx, XtXt_2).reshape(-1), dim=0)
             self.loss_SB = -(self.opt.num_timesteps-self.time_idx[0])/self.opt.num_timesteps*self.opt.tau*ET_XY
             self.loss_SB += self.opt.tau*torch.mean((self.real_A_noisy-self.fake_B)**2)
+
+            # Scheme A: Use GT to guide transport in SB framework
+            paired_strategy = getattr(self.opt, 'paired_strategy', 'none')
+            if getattr(self.opt, 'paired_stage', False) and paired_strategy == 'sb_gt_transport':
+                # Add GT guidance term in the form of transport cost
+                # This guides fake_B toward real_B while maintaining SB's mathematical structure
+                self.loss_SB_guidance = self.opt.tau * torch.mean((self.fake_B - self.real_B)**2)
+                self.loss_SB += self.loss_SB_guidance
         if self.opt.lambda_NCE > 0.0:
             self.loss_NCE = self.calculate_NCE_loss(self.real_A, fake)
         else:
@@ -325,9 +355,128 @@ class SBModel(BaseModel):
             loss_NCE_both = (self.loss_NCE + self.loss_NCE_Y) * 0.5
         else:
             loss_NCE_both = self.loss_NCE
-        
-        self.loss_G = self.loss_G_GAN + self.opt.lambda_SB*self.loss_SB + self.opt.lambda_NCE*loss_NCE_both
+
+        # Strategy-specific losses for paired training
+        paired_strategy = getattr(self.opt, 'paired_strategy', 'none')
+        extra_loss = 0.0
+        lambda_reg = getattr(self.opt, 'lambda_reg', 1.0)  # Default weight for B1-B5
+
+        if getattr(self.opt, 'paired_stage', False):
+            if paired_strategy == 'sb_gt_transport':
+                # Scheme A: GT guidance already added to loss_SB above
+                pass
+
+            elif paired_strategy == 'l1_loss':
+                # Baseline: Simple L1 loss
+                self.loss_L1 = self.criterionL1(fake, self.real_B) * getattr(self.opt, 'lambda_L1', 1.0)
+                extra_loss += self.loss_L1
+
+            elif paired_strategy == 'nce_feature':
+                # B1: Enhanced NCE - pull fake_B and real_B features together
+                self.loss_NCE_paired = self.calculate_NCE_loss(self.real_B, fake) * lambda_reg
+                extra_loss += self.loss_NCE_paired
+
+            elif paired_strategy == 'frequency':
+                # B2: Frequency domain loss
+                self.loss_freq = self.compute_frequency_loss(fake, self.real_B) * lambda_reg
+                extra_loss += self.loss_freq
+
+            elif paired_strategy == 'gradient':
+                # B3: Gradient/structure loss
+                self.loss_gradient = self.compute_gradient_loss(fake, self.real_B) * lambda_reg
+                extra_loss += self.loss_gradient
+
+            elif paired_strategy == 'multiscale':
+                # B4: Multi-scale loss
+                self.loss_multiscale = self.compute_multiscale_loss(fake, self.real_B) * lambda_reg
+                extra_loss += self.loss_multiscale
+
+            elif paired_strategy == 'selfsup_contrast':
+                # B5: Self-supervised contrastive learning
+                self.loss_contrast = self.compute_contrastive_loss(fake, self.real_B) * lambda_reg
+                extra_loss += self.loss_contrast
+
+        self.loss_G = self.loss_G_GAN + self.opt.lambda_SB*self.loss_SB + self.opt.lambda_NCE*loss_NCE_both + extra_loss
         return self.loss_G
+
+    def compute_frequency_loss(self, fake_B, real_B):
+        """B2: Frequency domain loss using FFT."""
+        # Convert to frequency domain
+        fake_fft = torch.fft.fft2(fake_B)
+        real_fft = torch.fft.fft2(real_B)
+
+        # Separate magnitude and phase
+        fake_mag = torch.abs(fake_fft)
+        real_mag = torch.abs(real_fft)
+
+        # L1 loss on magnitude spectrum
+        freq_loss = torch.mean(torch.abs(fake_mag - real_mag))
+
+        return freq_loss
+
+    def compute_gradient_loss(self, fake_B, real_B):
+        """B3: Gradient-based structure loss."""
+        # Compute gradients
+        def compute_gradients(img):
+            # Sobel-like gradient
+            grad_x = img[:, :, :, 1:] - img[:, :, :, :-1]
+            grad_y = img[:, :, 1:, :] - img[:, :, :-1, :]
+            return grad_x, grad_y
+
+        fake_grad_x, fake_grad_y = compute_gradients(fake_B)
+        real_grad_x, real_grad_y = compute_gradients(real_B)
+
+        # L1 loss on gradients
+        loss_x = torch.mean(torch.abs(fake_grad_x - real_grad_x))
+        loss_y = torch.mean(torch.abs(fake_grad_y - real_grad_y))
+
+        return loss_x + loss_y
+
+    def compute_multiscale_loss(self, fake_B, real_B):
+        """B4: Multi-scale pyramid loss."""
+        def build_pyramid(img, levels=3):
+            pyramid = [img]
+            for _ in range(levels - 1):
+                img = torch.nn.functional.avg_pool2d(img, kernel_size=2, stride=2)
+                pyramid.append(img)
+            return pyramid
+
+        fake_pyramid = build_pyramid(fake_B)
+        real_pyramid = build_pyramid(real_B)
+
+        # Weighted loss at each scale
+        total_loss = 0.0
+        weights = [1.0, 0.5, 0.25]  # Coarse to fine
+        for i, (f, r, w) in enumerate(zip(fake_pyramid, real_pyramid, weights)):
+            total_loss += w * torch.mean(torch.abs(f - r))
+
+        return total_loss / sum(weights)
+
+    def compute_contrastive_loss(self, fake_B, real_B):
+        """B5: Self-supervised contrastive learning using netF features."""
+        # Extract features using the existing netF network
+        z = torch.randn(size=[self.real_A.size(0), 4*self.opt.ngf]).to(self.real_A.device)
+
+        # Get features from fake_B and real_B
+        feat_fake = self.netG(fake_B, self.time_idx*0, z, self.nce_layers, encode_only=True)
+        feat_real = self.netG(self.real_B, self.time_idx*0, z, self.nce_layers, encode_only=True)
+
+        # Pool features
+        feat_fake_pool, sample_ids = self.netF(feat_fake, self.opt.num_patches, None)
+        feat_real_pool, _ = self.netF(feat_real, self.opt.num_patches, sample_ids)
+
+        # Contrastive loss: pull positive pairs together
+        total_contrast_loss = 0.0
+        for f_fake, f_real in zip(feat_fake_pool, feat_real_pool):
+            # Cosine similarity
+            f_fake_norm = f_fake / (f_fake.norm(dim=1, keepdim=True) + 1e-8)
+            f_real_norm = f_real / (f_real.norm(dim=1, keepdim=True) + 1e-8)
+
+            # Pull together (maximize similarity)
+            similarity = (f_fake_norm * f_real_norm).sum(dim=1).mean()
+            total_contrast_loss += (1.0 - similarity)
+
+        return total_contrast_loss / len(feat_fake_pool)
 
 
     def calculate_NCE_loss(self, src, tgt):
@@ -348,3 +497,92 @@ class SBModel(BaseModel):
             total_nce_loss += loss.mean()
 
         return total_nce_loss / n_layers
+
+    def compute_paired_metrics(self):
+        """Compute SSIM, PSNR, and NRMSE metrics between fake_B and real_B.
+
+        Only call this when paired_stage is enabled and we have ground truth.
+
+        Returns:
+            dict with keys 'ssim', 'psnr', 'nrmse', each containing the mean value across the batch
+        """
+        from skimage.metrics import structural_similarity as ssim
+        from skimage.metrics import peak_signal_noise_ratio as psnr
+        from skimage.metrics import normalized_root_mse as nrmse
+
+        if not hasattr(self, 'fake_B') or not hasattr(self, 'real_B'):
+            return {'ssim': 0.0, 'psnr': 0.0, 'nrmse': 0.0}
+
+        def tensor_to_numpy(tensor):
+            """Convert tensor to numpy array for metric computation."""
+            if isinstance(tensor, torch.Tensor):
+                img = tensor.detach().cpu().float().numpy()
+            else:
+                img = np.array(tensor)
+
+            # Handle different channel configurations
+            if img.ndim == 4:  # Batch dimension
+                return img
+            elif img.ndim == 3:
+                if img.shape[0] == 1:  # Single channel [1, H, W]
+                    img = img[0]
+                elif img.shape[0] == 2:  # Complex data [2, H, W] - convert to magnitude
+                    real, imag = img[0], img[1]
+                    img = np.sqrt(real * real + imag * imag)
+                else:  # Multi-channel
+                    img = img[0]  # Take first channel
+
+            return img
+
+        fake_B_np = tensor_to_numpy(self.fake_B)  # [B, C, H, W] or [B, H, W]
+        real_B_np = tensor_to_numpy(self.real_B)  # [B, C, H, W] or [B, H, W]
+
+        batch_size = fake_B_np.shape[0] if fake_B_np.ndim == 4 else 1
+
+        ssim_vals = []
+        psnr_vals = []
+        nrmse_vals = []
+
+        for i in range(batch_size):
+            # Extract single image from batch
+            if fake_B_np.ndim == 4:
+                fake_img = fake_B_np[i]
+                real_img = real_B_np[i]
+            else:
+                fake_img = fake_B_np
+                real_img = real_B_np
+
+            # Handle channel dimension
+            if fake_img.ndim == 3:
+                if fake_img.shape[0] == 1:  # [1, H, W]
+                    fake_img = fake_img[0]
+                    real_img = real_img[0]
+                elif fake_img.shape[0] == 2:  # Complex [2, H, W]
+                    fake_img = np.sqrt(fake_img[0]**2 + fake_img[1]**2)
+                    real_img = np.sqrt(real_img[0]**2 + real_img[1]**2)
+
+            # Compute data range
+            data_range = real_img.max() - real_img.min()
+            if data_range == 0:
+                data_range = 1.0
+
+            try:
+                ssim_val = ssim(real_img, fake_img, data_range=data_range)
+                psnr_val = psnr(real_img, fake_img, data_range=data_range)
+                nrmse_val = nrmse(real_img, fake_img, normalization='mean')
+
+                ssim_vals.append(float(ssim_val))
+                psnr_vals.append(float(psnr_val))
+                nrmse_vals.append(float(nrmse_val))
+            except Exception as e:
+                # If metric computation fails, use default values
+                print(f"Warning: Failed to compute metrics: {e}")
+                ssim_vals.append(0.0)
+                psnr_vals.append(0.0)
+                nrmse_vals.append(1.0)
+
+        return {
+            'ssim': float(np.mean(ssim_vals)),
+            'psnr': float(np.mean(psnr_vals)),
+            'nrmse': float(np.mean(nrmse_vals))
+        }

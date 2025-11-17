@@ -58,6 +58,17 @@ if __name__ == '__main__':
 
             if total_iters % opt.print_freq == 0:    # print training losses and save logging information to the disk
                 losses = model.get_current_losses()
+
+                # Compute and log paired metrics if enabled
+                if getattr(opt, 'compute_paired_metrics', False) and getattr(opt, 'paired_stage', False):
+                    metrics = model.compute_paired_metrics()
+                    # Add metrics to losses dict for logging
+                    losses.update({
+                        'metric_SSIM': metrics['ssim'],
+                        'metric_PSNR': metrics['psnr'],
+                        'metric_NRMSE': metrics['nrmse']
+                    })
+
                 visualizer.print_current_losses(epoch, epoch_iter, losses, optimize_time, t_data)
                 if opt.display_id is None or opt.display_id > 0:
                     visualizer.plot_current_losses(epoch, float(epoch_iter) / dataset_size, losses)
