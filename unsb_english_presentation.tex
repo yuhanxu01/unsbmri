@@ -331,14 +331,14 @@ The marginal distribution $q_{\phi_i}(x_1)$ must match the true target distribut
 
 Define transition distribution:
 \begin{equation}
-p(x_{t_{i+1}}|x_1, x_{t_i}) := \mathcal{N}\left(x_{t_{i+1}}\mid s_{i+1}x_1 + (1-s_{i+1})x_{t_i}, \textcolor{blue}{s_{i+1}(1-s_{i+1})\tau(1-t_i)}I\right)
+p(x_{t_{i+1}}|x_{t_i}, x_1) := \mathcal{N}\left(x_{t_{i+1}}\mid s_{i+1}x_1 + (1-s_{i+1})x_{t_i}, \textcolor{blue}{s_{i+1}(1-s_{i+1})\tau(1-t_i)}I\right)
 \end{equation}
 where $s_{i+1} := \frac{t_{i+1} - t_i}{1 - t_i}$
 
 \pause
 \begin{block}{Induced Conditional Distribution}
 \begin{equation}
-q_{\phi_i}(x_{t_{i+1}}|x_{t_i}) := \mathbb{E}_{q_{\phi_i}(x_1|x_{t_i})}[p(x_{t_{i+1}}|x_1, x_{t_i})]
+q_{\phi_i}(x_{t_{i+1}}|x_{t_i}) := \mathbb{E}_{q_{\phi_i}(x_1|x_{t_i})}[p(x_{t_{i+1}}|x_{t_i}, x_1)]
 \end{equation}
 \end{block}
 
