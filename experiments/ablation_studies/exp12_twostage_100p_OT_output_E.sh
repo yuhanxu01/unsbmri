@@ -12,7 +12,7 @@
 # Load pretrained, 100% paired data, OT_output + entropy loss
 
 # Change to the working directory
-BASE_DIR="/gpfs/scratch/rl5285/unsb_mri/unsbmri_2stage"
+BASE_DIR="/gpfs/scratch/rl5285/test/unsbmri"
 cd "$BASE_DIR" || { echo "ERROR: Failed to cd to $BASE_DIR"; exit 1; }
 
 echo "=========================================="
