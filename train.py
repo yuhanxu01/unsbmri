@@ -9,7 +9,14 @@ from util.wandb_logger import WandbLogger
 if __name__ == '__main__':
     opt = TrainOptions().parse()
     dataset = create_dataset(opt)
-    dataset2 = create_dataset(opt)
+
+    # I2SB model uses paired data exclusively, so only one dataset is needed
+    # Other models (like SB) may need two datasets for unpaired training
+    if opt.model == 'i2sb':
+        dataset2 = None
+    else:
+        dataset2 = create_dataset(opt)
+
     dataset_size = len(dataset)
 
     model = create_model(opt)
@@ -30,7 +37,22 @@ if __name__ == '__main__':
         visualizer.reset()              # reset the visualizer: make sure it saves the results to HTML at least once every epoch
 
         dataset.set_epoch(epoch)
-        for i, (data,data2) in enumerate(zip(dataset,dataset2)):  # inner loop within one epoch
+
+        # Create data iterator based on model type
+        if dataset2 is None:
+            # I2SB model: use single dataset
+            data_iterator = enumerate(dataset)
+        else:
+            # Other models: use paired datasets
+            data_iterator = enumerate(zip(dataset, dataset2))
+
+        for i, data_item in data_iterator:  # inner loop within one epoch
+            # Unpack data based on iterator type
+            if dataset2 is None:
+                data = data_item
+                data2 = None
+            else:
+                data, data2 = data_item
             iter_start_time = time.time()  # timer for computation per iteration
             if total_iters % opt.print_freq == 0:
                 t_data = iter_start_time - iter_data_time
