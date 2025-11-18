@@ -61,6 +61,16 @@ The Schrödinger Bridge (SB) seeks the \alert{optimal stochastic process} connec
 where $q(x_t)$ is a reference process (typically Ornstein-Uhlenbeck)
 \end{block}
 
+\begin{block}{Intuition}
+SB solves a ``most likely'' stochastic interpolation problem:
+\begin{itemize}
+    \item Start from $\pi_0$ and end at $\pi_1$
+    \item Among all stochastic processes that connect them
+    \item Choose the process closest (in KL sense) to a simple reference diffusion
+\end{itemize}
+This yields a \textbf{stochastic and smooth} transformation unlike OT's deterministic mapping.
+\end{block}
+
 \begin{alertblock}{Key Properties}
 \begin{itemize}
     \item SB is a \textbf{dynamic process}: $x_0 \sim \pi_0 \rightarrow x_t \rightarrow x_1 \sim \pi_1$
@@ -105,6 +115,16 @@ p(\{x_{t_n}\}) = \textcolor{blue}{p(x_{t_N}|x_{t_{N-1}})} \textcolor{green!50!bl
 \end{center}
 
 \textbf{Inductive strategy:} Learn $p(x_{t_{i+1}}|x_{t_i})$ assuming we can sample from $p(x_{t_i})$
+
+\begin{block}{Why this decomposition matters}
+The full path distribution $p(\{x_t\}_{t\in[0,1]})$ is infinite-dimensional.
+Markov factorization reduces the problem to learning only:
+\[
+p(x_{t_{i+1}}\mid x_{t_i}),\quad i=0,\dots,N-1,
+\]
+which are simple, finite-dimensional conditional distributions.
+Thus UNSB avoids directly modeling the entire trajectory.
+\end{block}
 \end{frame}
 
 \begin{frame}{Why Time Decomposition?}
@@ -168,11 +188,30 @@ q_{\phi_i}(x_1) &:= \mathbb{E}_{p(x_{t_i})}[q_{\phi_i}(x_1|x_{t_i})]
 \begin{alertblock}{Objective}
 Optimize $\phi_i$ such that $q_{\phi_i}(x_1|x_{t_i}) = p(x_1|x_{t_i})$
 \end{alertblock}
+
+\begin{alertblock}{Why predict $x_1$?}
+We only have access to real samples from $\pi_1$, not intermediate
+states $p(x_t)$.
+Thus, $p(x_1\mid x_{t_i})$ is the \textbf{only conditional distribution directly learnable}
+from available data.
+Once this conditional is learned, the true transition kernel
+$p(x_{t_{i+1}}\mid x_{t_i})$
+can be recovered by marginalizing over $x_1$ using the SB Gaussian bridge formula.
+\end{alertblock}
 \end{frame}
 
 \section{Theorem 1: Optimization Objective}
 
 \begin{frame}{Theorem 1: Constrained Optimization}
+\begin{block}{Where does the loss come from?}
+The objective in (9)--(10) is a discretized form of the SB variational principle:
+\[
+\min \; \mathbb{E}[\text{transport cost}] - \tau \cdot \text{entropy}.
+\]
+The energy term encourages $x_{t_i}$ and $x_1$ to align, while the entropy term ensures the stochasticity inherent in SB.
+This mirrors entropy-regularized optimal transport.
+\end{block}
+
 \begin{theorem}[Core UNSB Theorem]
 For any $t_i$, consider the following constrained optimization:
 \begin{align}
@@ -351,8 +390,36 @@ q_{\phi_i}(x_{t_{i+1}}|x_{t_i}) := \mathbb{E}_{q_{\phi_i}(x_1|x_{t_i})}[p(x_{t_{
 \end{itemize}
 
 \pause
+\begin{block}{Interpretation of the Gaussian bridge}
+The mean
+\[
+s_{i+1}x_1 + (1-s_{i+1})x_{t_i}
+\]
+describes a \textbf{linear interpolation} between current and final state.
+
+The variance
+\[
+s_{i+1}(1-s_{i+1})\tau(1-t_i)
+\]
+expresses the \textbf{uncertainty of a Brownian bridge}, which must vanish at $t=1$ and be largest in the middle.
+
+Thus equation (11) is exactly the conditional law of a Brownian bridge conditioned on $x_{t_i}$ and $x_1$.
+\end{block}
+
+\pause
 \vspace{0.3cm}
 \textbf{Question:} Why take expectation over $x_1$ instead of using a fixed endpoint?
+
+\pause
+\begin{alertblock}{Why average over $x_1$?}
+The bridge dynamics from $t_i$ to $t_{i+1}$ depend on the unknown future endpoint.
+In SB theory the correct transition is obtained by marginalizing the bridge kernel:
+\[
+p(x_{t_{i+1}}\mid x_{t_i})
+ = \mathbb{E}_{p(x_1\mid x_{t_i})}[p(x_{t_{i+1}}\mid x_{t_i},x_1)].
+\]
+Thus UNSB follows the \textbf{exact} SB decomposition.
+\end{alertblock}
 \end{frame}
 
 \begin{frame}{Theorem 1 Conclusion}
@@ -385,6 +452,18 @@ q_{\phi_i}(x_{t_{i+1}}) &= p(x_{t_{i+1}})
 \pause
 \vspace{0.3cm}
 \textbf{Key insight:} Learn endpoint prediction $\Rightarrow$ automatically get entire Markov chain
+
+\pause
+\begin{block}{Meaning of the theorem}
+If the endpoint predictor $q_{\phi_i}(x_1\mid x_{t_i})$ is learned perfectly,
+then the entire Markov chain of the SB is recovered automatically:
+\begin{itemize}
+    \item the true posterior $p(x_1\mid x_{t_i})$,
+    \item the true transition kernel $p(x_{t_{i+1}}\mid x_{t_i})$,
+    \item and the true marginal $p(x_{t_{i+1}})$.
+\end{itemize}
+This shows that \textbf{learning only endpoint predictions is sufficient} to reconstruct the whole stochastic process.
+\end{block}
 \end{frame}
 
 \section{Algorithm and Implementation}
@@ -414,6 +493,13 @@ q_{\phi_i}(x_{t_{i+1}}) &= p(x_{t_{i+1}})
 \ENDFOR
 \end{algorithmic}
 \end{algorithm}
+
+\begin{block}{Why detach the forward simulation?}
+The forward OU updates serve as \textbf{sampling of intermediate states},
+not as trainable modules.
+Detaching prevents gradients from flowing backward through the simulated
+stochastic process, stabilizing training and reducing memory cost.
+\end{block}
 \end{frame}
 
 \begin{frame}{Time Scheduling Strategy}
@@ -450,11 +536,26 @@ Cumulative sum and normalize: emphasizes later time steps
 \end{itemize}
 
 \pause
+\begin{block}{Harmonic schedule intuition}
+Large steps at early times rapidly move samples
+toward the target distribution.
+Smaller steps near $t=1$ match the vanishing variance of the bridge
+and allow fine refinement.
+The schedule approximates the continuous-time SB in a few discrete steps.
+\end{block}
+
+\pause
 \vspace{0.3cm}
 \textbf{Question:} Why not use uniform spacing $t_i = i/T$?
 \end{frame}
 
 \begin{frame}{UNSB vs. Diffusion Models}
+\begin{block}{Conceptual difference}
+Diffusion models learn a reverse SDE by progressively denoising.
+UNSB learns a small set of \textbf{direct stochastic transport maps}
+and relies on SB theory rather than noise annealing.
+\end{block}
+
 \begin{columns}
 \begin{column}{0.5\textwidth}
 \textbf{Diffusion Models:}
@@ -555,6 +656,17 @@ Add ground truth guidance within SB framework:
 \end{itemize}
 
 \pause
+\begin{block}{Why GT term integrates cleanly}
+The added term
+\[
+\tau\|\hat{X}_t - X_{\text{GT}}\|^2
+\]
+is another transport cost in the SB objective.
+It does not break the stochastic nature or theoretical structure of the SB.
+This is why paired data can be incorporated consistently.
+\end{block}
+
+\pause
 \vspace{0.3cm}
 \textbf{Two-stage training strategy:}
 \begin{enumerate}
@@ -631,6 +743,10 @@ Add ground truth guidance within SB framework:
 \end{frame}
 
 \begin{frame}{UNSB vs. I2SB-Inversion: Key Differences}
+\begin{alertblock}{One-sentence summary}
+UNSB learns unpaired translation maps; I2SB-Inversion learns conditioned reconstruction maps.
+\end{alertblock}
+
 \begin{table}
 \small
 \begin{tabular}{p{3cm}p{4cm}p{4cm}}
@@ -987,6 +1103,15 @@ Natural image translation & \textcolor{green!50!black}{\checkmark\checkmark} & \
     \item \textbf{Control}: Text-guided Schrödinger Bridge
     \item \textbf{Hybrid}: Combine UNSB unpaired learning with I2SB multicontrast guidance
 \end{enumerate}
+
+\pause
+\begin{block}{Key open questions}
+\begin{itemize}
+    \item Can UNSB be extended to continuous-time neural SDEs?
+    \item Can energy-based entropy estimation be replaced by score matching?
+    \item Can single-step SB generators approximate the entire process?
+\end{itemize}
+\end{block}
 \end{frame}
 
 \begin{frame}{References}
