@@ -64,5 +64,12 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--lambda_L1', type=float, default=1.0, help='[l1_loss] Weight for L1 loss')
         parser.add_argument('--lambda_reg', type=float, default=1.0, help='[B1-B5] Weight for regularization losses')
 
+        # Loss control options for paired experiments (ablation studies)
+        parser.add_argument('--use_ot_input', action='store_true', help='Use OT input loss: tau * mean((real_A_noisy - real_B)^2)')
+        parser.add_argument('--use_ot_output', action='store_true', help='Use OT output loss: tau * mean((fake_B - real_B)^2)')
+        parser.add_argument('--use_entropy_loss', action='store_true', help='Use entropy loss (ET_XY term from SB formulation)')
+        parser.add_argument('--disable_gan', action='store_true', help='Disable GAN adversarial loss')
+        parser.add_argument('--disable_nce', action='store_true', help='Disable NCE contrastive loss')
+
         self.isTrain = True
         return parser
