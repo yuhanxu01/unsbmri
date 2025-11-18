@@ -466,6 +466,519 @@ This shows that \textbf{learning only endpoint predictions is sufficient} to rec
 \end{block}
 \end{frame}
 
+\section{Generation–Training Dual-Stage Mechanism}
+
+\begin{frame}{Why Two Stages? A Structural View}
+UNSB separates the learning dynamics into a \textbf{generation stage} and a \textbf{training stage}.
+Although the Markov chain $p(x_{t_{j+1}}|x_{t_j})$ can be simulated once the conditional generator
+$q_{\phi_i}(x_1|x_{t_j})$ is available, this does \emph{not} imply that training is unnecessary after generation.
+Instead, the two stages serve fundamentally different purposes.
+
+\begin{itemize}
+    \item \textbf{Generation Stage:}
+    Simulates the forward SB trajectory using the current generator.
+    No gradients are allowed to flow through the chain (``stop–gradient''),
+    ensuring unbiased intermediate samples.
+
+    \item \textbf{Training Stage:}
+    Uses the generated samples to compute the OT+entropy objective and the adversarial constraint.
+    Updates the generator to better approximate $p(x_1|x_{t_i})$.
+\end{itemize}
+
+Critically, the Markov chain generated so far is \emph{not} correct SB dynamics; it reflects the
+current generator, not the optimal one. Training must refine $q_{\phi_i}$ iteratively.
+\end{frame}
+
+\begin{frame}{Generation vs. Training: Side-by-Side Comparison}
+\begin{table}
+\small
+\begin{tabular}{p{3cm}p{5cm}p{5cm}}
+\toprule
+\textbf{Aspect} & \textbf{Generation Stage} & \textbf{Training Stage} \\
+\midrule
+\textbf{Purpose} &
+Sample intermediate states &
+Optimize generator parameters \\
+\midrule
+\textbf{Gradient} &
+Stop-gradient (detached) &
+Full backpropagation \\
+\midrule
+\textbf{Input} &
+$x_0 \sim \pi_0$, current $q_{\phi}$ &
+Generated $(x_{t_i}, x_1)$ pairs \\
+\midrule
+\textbf{Output} &
+Trajectory $\{x_{t_j}\}_{j=0}^{i}$ &
+Updated $\phi_i$ \\
+\midrule
+\textbf{Computational role} &
+Forward simulation (inference-like) &
+Loss computation + optimization \\
+\midrule
+\textbf{Frequency} &
+Every minibatch &
+Every minibatch \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\pause
+\vspace{0.3cm}
+\textbf{Key insight:} Generation is \alert{not inference}—it's a mechanism to create training data for local conditionals.
+\end{frame}
+
+\begin{frame}{The Role of the Generation Stage}
+\begin{block}{Purpose}
+Generate unbiased intermediate states $\{x_{t_j}\}_{j=0}^{i}$ required to evaluate
+the objective for time step $t_i$.
+\end{block}
+
+Given $x_0 \sim \pi_0$, UNSB performs:
+\begin{equation}
+x_{t_{j+1}}
+\sim q_{\phi}(x_{t_{j+1}}|x_{t_j})
+= \mathbb{E}_{q_{\phi}(x_1|x_{t_j})}
+\left[
+p(x_{t_{j+1}}|x_1, x_{t_j})
+\right],
+\end{equation}
+where the Gaussian kernel $p(\cdot|\cdot)$ corresponds to the local OU transition.
+
+\textbf{Key constraints:}
+\begin{itemize}
+    \item No gradient flows through sampling.
+    \item Generated $x_{t_j}$ represents the \emph{current} approximation of SB marginals.
+    \item These samples enable the conditional loss and KL constraint at time $t_i$.
+\end{itemize}
+
+The generation stage is therefore a \textbf{rollout} of the current model, not the final system.
+\end{frame}
+
+\begin{frame}{Why Stop-Gradient is Essential}
+\begin{alertblock}{Mathematical necessity of detachment}
+If we allow gradients to flow through the entire chain $x_0 \rightarrow x_{t_1} \rightarrow \cdots \rightarrow x_{t_i}$,
+we face two critical problems:
+\end{alertblock}
+
+\pause
+\textbf{Problem 1: Computational explosion}
+\begin{itemize}
+    \item Memory cost grows linearly with $i$ (number of time steps traversed)
+    \item Gradient computation requires storing all intermediate activations
+    \item For $i=4$ and image size $256\times256$, memory $\sim 4\times$ batch size
+\end{itemize}
+
+\pause
+\textbf{Problem 2: Biased gradient estimates}
+\begin{itemize}
+    \item The chain $\{x_{t_j}\}$ is a \textbf{stochastic rollout}
+    \item Backprop through stochastic sampling introduces high variance
+    \item The gradient w.r.t. $\phi_i$ should reflect $p(x_1|x_{t_i})$, not the entire path distribution
+\end{itemize}
+
+\pause
+\begin{block}{Solution: Stop-gradient}
+Treat $x_{t_j}$ ($j < i$) as \textbf{fixed samples} from $q_{\phi}(x_{t_j})$,
+allowing unbiased estimation of $\mathcal{L}_{SB}(\phi_i, t_i)$.
+\end{block}
+\end{frame}
+
+\begin{frame}{The Role of the Training Stage}
+\textbf{Generation alone cannot improve the model.}
+It merely simulates what the current $q_{\phi_i}$ produces.
+To improve $q_{\phi_i}$, the UNSB framework must evaluate two core terms:
+
+\begin{itemize}
+    \item \textbf{OT + entropy loss} (Eq. 9)
+    \item \textbf{Marginal-matching adversarial constraint} (Eq. 10)
+\end{itemize}
+
+During the training stage, we compute:
+\begin{equation}
+\mathcal{L}_{SB}(\phi_i,t_i) =
+\mathbb{E}_{q_{\phi_i}(x_{t_i},x_1)}
+\left[\|x_{t_i}-x_1\|^2\right]
+- 2\tau(1-t_i)H(q_{\phi_i}),
+\end{equation}
+and enforce:
+\begin{equation}
+D_{KL}\left(q_{\phi_i}(x_1)\,\|\,p(x_1)\right)=0.
+\end{equation}
+
+Only the training stage updates the generator, gradually making the Markov chain closer to the
+true SB dynamics.
+\end{frame}
+
+\begin{frame}{Figure 3 Visualization: Dual-Stage Mechanism}
+\begin{center}
+\begin{tikzpicture}[scale=0.65, transform shape]
+% Generation Stage (Left)
+\node[anchor=north] at (-4,4) {\textbf{Generation Stage}};
+\node[circle, fill=blue!20, minimum size=0.8cm] (x0) at (-6,2.5) {$x_0$};
+\node[circle, fill=blue!20, minimum size=0.8cm] (xt1) at (-4.5,2.5) {$x_{t_1}$};
+\node[circle, fill=blue!20, minimum size=0.8cm] (xt2) at (-3,2.5) {$x_{t_2}$};
+\node[circle, fill=red!20, minimum size=0.8cm] (xti) at (-1,2.5) {$x_{t_i}$};
+
+% Generators for generation
+\node[rectangle, fill=yellow!20, minimum width=0.8cm, minimum height=0.5cm] (g0) at (-5.25,1) {$q_{\phi_0}$};
+\node[rectangle, fill=yellow!20, minimum width=0.8cm, minimum height=0.5cm] (g1) at (-3.75,1) {$q_{\phi_1}$};
+
+% Arrows with sg labels
+\draw[->, thick, blue] (x0) -- (xt1) node[midway, above, red, font=\tiny] {sg};
+\draw[->, thick, blue] (xt1) -- (xt2) node[midway, above, red, font=\tiny] {sg};
+\draw[->, thick, blue] (xt2) -- (xti) node[midway, above, red, font=\tiny] {sg};
+
+% Training Stage (Right)
+\node[anchor=north] at (4,4) {\textbf{Training Stage}};
+\node[circle, fill=red!20, minimum size=0.8cm] (xti2) at (2,2.5) {$x_{t_i}$};
+\node[circle, fill=green!20, minimum size=0.8cm] (x1) at (5,2.5) {$\hat{x}_1$};
+\node[rectangle, fill=orange!30, minimum width=1.2cm, minimum height=0.6cm] (gi) at (3.5,1) {$q_{\phi_i}$};
+
+% Real sample
+\node[circle, fill=green!40, minimum size=0.8cm] (x1real) at (6.5,2.5) {$x_1^{\text{real}}$};
+
+% Arrows with gradient
+\draw[->, thick, green!50!black] (xti2) -- (x1);
+\draw[->, thick, red, dashed] (x1) -- (gi) node[midway, right, font=\tiny] {grad};
+\draw[->, thick, red, dashed] (gi) -- (xti2);
+
+% Loss computation
+\node[rectangle, draw, fill=cyan!10, minimum width=2cm, minimum height=0.8cm, align=center] at (4.5,0) {$\mathcal{L}_{SB}$\\$\mathcal{L}_{GAN}$};
+
+% Discriminator
+\draw[->, thick, purple] (x1) -- (4.5,0.4);
+\draw[->, thick, purple] (x1real) -- (4.5,0.4);
+\end{tikzpicture}
+\end{center}
+
+\textbf{Left (Generation):} Forward rollout with stop-gradient (sg) at each step.
+
+\textbf{Right (Training):} Backpropagation only through $q_{\phi_i}$, using generated $x_{t_i}$ and real $x_1^{\text{real}}$.
+\end{frame}
+
+\begin{frame}{Data Flow vs. Gradient Flow}
+\begin{center}
+\begin{tikzpicture}[scale=0.75]
+% Nodes
+\node[circle, fill=blue!20, minimum size=1cm] (x0) at (0,0) {$x_0$};
+\node[circle, fill=blue!20, minimum size=1cm] (xt1) at (3,0) {$x_{t_1}$};
+\node[circle, fill=blue!20, minimum size=1cm] (xt2) at (6,0) {$x_{t_2}$};
+\node[circle, fill=red!20, minimum size=1cm] (xti) at (9,0) {$x_{t_i}$};
+\node[circle, fill=green!20, minimum size=1cm] (x1) at (12,0) {$\hat{x}_1$};
+
+% Generators
+\node[rectangle, fill=yellow!20] (g0) at (1.5,1.5) {$q_{\phi_0}$};
+\node[rectangle, fill=yellow!20] (g1) at (4.5,1.5) {$q_{\phi_1}$};
+\node[rectangle, fill=orange!30] (gi) at (10.5,1.5) {$q_{\phi_i}$};
+
+% Data flow (solid arrows)
+\draw[->, ultra thick, blue] (x0) -- (xt1) node[midway, below] {data};
+\draw[->, ultra thick, blue] (xt1) -- (xt2) node[midway, below] {data};
+\draw[->, ultra thick, blue] (xt2) -- (xti) node[midway, below] {data};
+\draw[->, ultra thick, green!50!black] (xti) -- (x1) node[midway, below] {data};
+
+% Gradient flow (dashed arrows, only for training stage)
+\draw[->, thick, red, dashed] (x1) -- (gi) node[midway, right] {grad};
+\draw[->, thick, red, dashed] (gi) -- (xti);
+
+% Stop-gradient markers
+\node[red] at (1.5,-0.8) {\large $\times$ grad};
+\node[red] at (4.5,-0.8) {\large $\times$ grad};
+\node[red] at (7.5,-0.8) {\large $\times$ grad};
+\node[green!50!black] at (10.5,-0.8) {\large \checkmark grad};
+\end{tikzpicture}
+\end{center}
+
+\textbf{Interpretation:}
+\begin{itemize}
+    \item \textcolor{blue}{Solid blue arrows}: Data flows forward through entire chain
+    \item \textcolor{red}{Dashed red arrows}: Gradients only backprop through $q_{\phi_i}$
+    \item \textcolor{red}{$\times$ markers}: Stop-gradient operations
+    \item \textcolor{green!50!black}{\checkmark marker}: Gradient allowed
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Why Generation Cannot Replace Training}
+A common misunderstanding is believing that if $x_{t_{j+1}}$ can be generated, training is redundant.
+However:
+
+\begin{alertblock}{Generation produces samples; training adjusts the model.}
+\end{alertblock}
+
+\begin{itemize}
+    \item Generated states depend on the \emph{current} $q_{\phi_i}$, not the optimal one.
+    \item Without training, the process collapses to trivial deterministic mappings.
+    \item Entropy term cannot be computed without joint samples from the generator.
+    \item The adversarial marginal constraint requires discriminator feedback.
+\end{itemize}
+
+\textbf{Therefore, generation ≠ learning.}
+Training uses generated states to refine $q_{\phi_i}$ so that the next generation stage is more accurate.
+\end{frame}
+
+\begin{frame}{The Bootstrap Loop: How Quality Improves}
+\begin{center}
+\begin{tikzpicture}[scale=0.9, transform shape]
+% Iteration 1
+\node[draw, rectangle, fill=blue!20, minimum width=3cm, minimum height=1cm] (gen1) at (0,3) {Generation $k$};
+\node[draw, rectangle, fill=green!20, minimum width=3cm, minimum height=1cm] (train1) at (4,3) {Training $k$};
+
+% Iteration 2
+\node[draw, rectangle, fill=blue!30, minimum width=3cm, minimum height=1cm] (gen2) at (0,1) {Generation $k+1$};
+\node[draw, rectangle, fill=green!30, minimum width=3cm, minimum height=1cm] (train2) at (4,1) {Training $k+1$};
+
+% Iteration 3
+\node[draw, rectangle, fill=blue!40, minimum width=3cm, minimum height=1cm] (gen3) at (0,-1) {Generation $k+2$};
+\node[draw, rectangle, fill=green!40, minimum width=3cm, minimum height=1cm] (train3) at (4,-1) {Training $k+2$};
+
+% Arrows
+\draw[->, ultra thick] (gen1) -- (train1) node[midway, above] {$\{x_{t_j}\}$};
+\draw[->, ultra thick] (train1) -- (gen2) node[midway, right] {$\phi^{(k+1)}$};
+\draw[->, ultra thick] (gen2) -- (train2) node[midway, above] {$\{x_{t_j}\}$};
+\draw[->, ultra thick] (train2) -- (gen3) node[midway, right] {$\phi^{(k+2)}$};
+\draw[->, ultra thick] (gen3) -- (train3) node[midway, above] {$\{x_{t_j}\}$};
+
+% Quality indicators
+\node[right] at (7,3) {Quality: Low};
+\node[right] at (7,1) {Quality: Medium};
+\node[right] at (7,-1) {Quality: High};
+\end{tikzpicture}
+\end{center}
+
+\pause
+\textbf{Convergence property:}
+\begin{itemize}
+    \item As $k \rightarrow \infty$, $q_{\phi_i}^{(k)}(x_1|x_{t_i}) \rightarrow p(x_1|x_{t_i})$
+    \item Generated samples $\{x_{t_j}\}^{(k)}$ approach true SB marginals $p(x_{t_j})$
+    \item This bootstrapping is provably stable under Theorem 1's conditions
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Why Don't Diffusion Models Need This Dual-Stage Mechanism?}
+\textbf{Question:} Diffusion models also have forward and reverse processes. Why don't they use UNSB's dual-stage approach?
+
+\pause
+\begin{columns}
+\begin{column}{0.5\textwidth}
+\textbf{Diffusion Models:}
+\begin{itemize}
+    \item \textcolor{blue}{Forward process is fixed} (Gaussian noise)
+    \item No need to generate training data
+    \item Learn only reverse process $p_\theta(x_{t-1}|x_t)$
+    \item Directly train on $x_t = \sqrt{\bar{\alpha}_t}x_0 + \sqrt{1-\bar{\alpha}_t}\epsilon$
+\end{itemize}
+\end{column}
+
+\begin{column}{0.5\textwidth}
+\textbf{UNSB:}
+\begin{itemize}
+    \item \textcolor{red}{Forward process is learned}
+    \item Must generate $x_{t_i}$ from $\pi_0$
+    \item Learn conditionals $q(x_1|x_{t_i})$
+    \item Cannot directly sample $x_{t_i}$ without simulation
+\end{itemize}
+\end{column}
+\end{columns}
+
+\pause
+\vspace{0.3cm}
+\begin{alertblock}{Key difference}
+UNSB learns a \textbf{bidirectional bridge} between arbitrary $\pi_0$ and $\pi_1$,
+requiring generation to produce intermediate samples.
+Diffusion models learn a \textbf{unidirectional denoising} process with a fixed forward path.
+\end{alertblock}
+\end{frame}
+
+\begin{frame}{Why Must Training Be Performed at Every Time Step?}
+UNSB optimizes local conditionals:
+\begin{equation}
+p(x_1|x_{t_i}) \qquad \forall i = 0,1,\dots,N-1.
+\end{equation}
+
+This requires:
+\begin{itemize}
+    \item Intermediate samples at exactly time $t_i$.
+    \item A fresh forward rollout for every minibatch.
+    \item Computing entropy over $(x_{t_i},x_1)$ pairs.
+    \item Comparing the predicted marginal $q_{\phi_i}(x_1)$ with $\pi_1$ using GAN loss.
+\end{itemize}
+
+If training is skipped at some time index:
+\begin{itemize}
+    \item The local conditional fails to converge.
+    \item The induced Markov chain deviates from the true SB dynamics.
+    \item Errors accumulate and destroy the bridge structure.
+\end{itemize}
+
+This mirrors classical SB: local consistency ensures global correctness.
+\end{frame}
+
+\begin{frame}{Detailed Algorithm: Dual-Stage in Practice}
+\begin{algorithm}[H]
+\small
+\caption{UNSB Dual-Stage Training (Single Iteration)}
+\begin{algorithmic}[1]
+\STATE Sample $x_0 \sim \pi_0$, $x_1^{\text{real}} \sim \pi_1$
+\STATE Randomly select time index $t_i \in \{t_0, t_1, \ldots, t_{N-1}\}$
+\STATE
+\STATE \textcolor{blue}{// === Generation Stage (Stop-Gradient) ===}
+\STATE $x_{t_0} \leftarrow x_0$
+\FOR{$j = 0$ to $i-1$}
+    \STATE $\hat{x}_1^{(j)} \leftarrow q_{\phi_j}(x_1|x_{t_j})$ with noise $z \sim \mathcal{N}(0,I)$
+    \STATE $x_{t_{j+1}} \leftarrow s_{j+1}\hat{x}_1^{(j)} + (1-s_{j+1})x_{t_j} + \sqrt{s_{j+1}(1-s_{j+1})\tau(1-t_j)}\epsilon$
+    \STATE $x_{t_{j+1}} \leftarrow \text{detach}(x_{t_{j+1}})$ \textcolor{red}{// Stop gradient!}
+\ENDFOR
+\STATE
+\STATE \textcolor{blue}{// === Training Stage (Full Gradient) ===}
+\STATE $\hat{x}_1^{(i)} \leftarrow q_{\phi_i}(x_1|x_{t_i})$ with noise $z \sim \mathcal{N}(0,I)$
+\STATE Compute $\mathcal{L}_{SB} = \|x_{t_i} - \hat{x}_1^{(i)}\|^2 - 2\tau(1-t_i)H(x_{t_i}, \hat{x}_1^{(i)})$
+\STATE Compute $\mathcal{L}_{GAN}$ using discriminator $D(\hat{x}_1^{(i)})$ vs. $D(x_1^{\text{real}})$
+\STATE Update $\phi_i$ via $\nabla_{\phi_i}(\lambda_{SB}\mathcal{L}_{SB} + \lambda_{GAN}\mathcal{L}_{GAN})$
+\end{algorithmic}
+\end{algorithm}
+\end{frame}
+
+\begin{frame}{Theoretical Guarantee: Why This Mechanism Works}
+\begin{theorem}[Convergence of Dual-Stage Training]
+Under the following conditions:
+\begin{enumerate}
+    \item Generators $q_{\phi_i}$ have sufficient capacity
+    \item Adversarial constraint is satisfied: $D_{KL}(q_{\phi_i}(x_1) \| p(x_1)) = 0$
+    \item Stop-gradient prevents bias accumulation
+\end{enumerate}
+The dual-stage mechanism converges to the true SB solution:
+\begin{equation}
+\lim_{k\rightarrow\infty} q_{\phi_i}^{(k)}(x_1|x_{t_i}) = p^*(x_1|x_{t_i}),
+\end{equation}
+where $p^*$ is the optimal Schrödinger Bridge.
+\end{theorem}
+
+\pause
+\vspace{0.3cm}
+\textbf{Proof sketch:}
+\begin{itemize}
+    \item Each time step $t_i$ optimizes a local SB subproblem
+    \item Markov property ensures global consistency from local optimality
+    \item Iterative refinement follows a contraction mapping (similar to Sinkhorn)
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Common Misconceptions About the Dual-Stage Mechanism}
+\begin{enumerate}
+    \item \textbf{Misconception:} ``Generation stage is just inference.''
+    \begin{itemize}
+        \item \textcolor{red}{Wrong:} Inference produces final $x_1$ from $x_0$
+        \item \textcolor{green!50!black}{Correct:} Generation produces intermediate $x_{t_i}$ for training
+    \end{itemize}
+
+    \pause
+    \item \textbf{Misconception:} ``We can train once and generate forever.''
+    \begin{itemize}
+        \item \textcolor{red}{Wrong:} Generator is learned, not given
+        \item \textcolor{green!50!black}{Correct:} Training iteratively improves generation quality
+    \end{itemize}
+
+    \pause
+    \item \textbf{Misconception:} ``Stop-gradient is for memory efficiency only.''
+    \begin{itemize}
+        \item \textcolor{red}{Wrong:} It's also theoretically necessary
+        \item \textcolor{green!50!black}{Correct:} Prevents biased gradient estimates and ensures correct SB learning
+    \end{itemize}
+
+    \pause
+    \item \textbf{Misconception:} ``This is the same as GAN training.''
+    \begin{itemize}
+        \item \textcolor{red}{Wrong:} GANs don't have time-indexed conditionals
+        \item \textcolor{green!50!black}{Correct:} UNSB learns a sequence of time-dependent generators $\{q_{\phi_i}\}$
+    \end{itemize}
+\end{enumerate}
+\end{frame}
+
+\begin{frame}{Computational Cost Analysis}
+\textbf{Per-iteration complexity:}
+
+\begin{table}
+\small
+\begin{tabular}{lcc}
+\toprule
+\textbf{Operation} & \textbf{Time Complexity} & \textbf{Memory} \\
+\midrule
+Generation stage & $O(i \cdot C_{forward})$ & $O(1)$ (detached) \\
+Training stage & $O(C_{forward} + C_{backward})$ & $O(B \cdot d)$ \\
+Discriminator & $O(C_D)$ & $O(B \cdot d_D)$ \\
+Energy network & $O(C_E)$ & $O(B \cdot d_E)$ \\
+\midrule
+\textbf{Total} & $O(i \cdot C_{forward} + C_{backward})$ & $O(B \cdot d)$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+where:
+\begin{itemize}
+    \item $i$: Number of time steps to reach $t_i$ (typically $\leq 5$)
+    \item $C_{forward}$: Cost of one generator forward pass
+    \item $C_{backward}$: Cost of backpropagation
+    \item $B$: Batch size, $d$: Data dimension
+\end{itemize}
+
+\pause
+\vspace{0.3cm}
+\textbf{Key observation:} Stop-gradient keeps memory $O(B \cdot d)$ instead of $O(i \cdot B \cdot d)$
+\end{frame}
+
+\begin{frame}{Summary of the Dual-Stage Mechanism}
+\textbf{Generation stage:}
+\begin{itemize}
+    \item Produces unbiased intermediate $x_{t_j}$.
+    \item Strictly stop-gradient.
+    \item Models the current bridge approximation.
+\end{itemize}
+
+\textbf{Training stage:}
+\begin{itemize}
+    \item Computes OT+entropy loss.
+    \item Enforces adversarial marginal matching.
+    \item Updates the generator.
+\end{itemize}
+
+\begin{alertblock}{Together they form a bootstrapping loop:}
+Generation provides samples → training improves the model →
+better model produces better samples → repeat.
+\end{alertblock}
+
+This mechanism is essential because SB is a \textbf{global optimal transport problem}
+solved through \textbf{local conditional learning}.
+\end{frame}
+
+\begin{frame}{Final Summary: Why Both Stages are Necessary}
+\begin{block}{Why both stages are necessary}
+\begin{enumerate}
+    \item \textbf{Generation:} Creates intermediate samples $x_{t_i}$ that cannot be directly sampled from $\pi_0$ or $\pi_1$
+    \item \textbf{Training:} Optimizes local conditionals $q_{\phi_i}(x_1|x_{t_i})$ using these samples
+    \item \textbf{Iteration:} Bootstraps from poor initial approximation to correct SB dynamics
+\end{enumerate}
+\end{block}
+
+\pause
+\begin{alertblock}{Design principles}
+\begin{itemize}
+    \item Stop-gradient: Ensures unbiased gradients and computational feasibility
+    \item Local learning: Each $\phi_i$ optimized independently, but globally consistent via Markov property
+    \item Adversarial constraint: Ensures marginal matching without paired data
+\end{itemize}
+\end{alertblock}
+
+\pause
+\vspace{0.3cm}
+\textbf{This mechanism distinguishes UNSB from:}
+\begin{itemize}
+    \item Diffusion models (fixed forward process)
+    \item GANs (no time decomposition)
+    \item OT methods (deterministic, requires Sinkhorn)
+\end{itemize}
+\end{frame}
+
 \section{Algorithm and Implementation}
 
 \begin{frame}{Training Algorithm Overview}
