@@ -30,7 +30,7 @@ All experiments disable GAN and NCE losses to isolate the effect of OT and entro
 - `exp7_twostage_10p_OT_output.sh` - OT_output only
 - `exp8_twostage_10p_OT_output_E.sh` - OT_output + Entropy
 
-**Training**: Load unpaired pretrained model, then 100 epochs (constant LR) + 100 epochs (decay) = 200 epochs
+**Training**: Load unpaired pretrained model (400 epochs), continue from epoch 401-500 (constant LR) + 501-600 (decay) = 200 additional epochs
 
 ### Group 3: Two-Stage (pretrained, 100% paired data)
 - `exp9_twostage_100p_OT_input.sh` - OT_input only
@@ -38,7 +38,7 @@ All experiments disable GAN and NCE losses to isolate the effect of OT and entro
 - `exp11_twostage_100p_OT_output.sh` - OT_output only
 - `exp12_twostage_100p_OT_output_E.sh` - OT_output + Entropy
 
-**Training**: Load unpaired pretrained model, then 100 epochs (constant LR) + 100 epochs (decay) = 200 epochs
+**Training**: Load unpaired pretrained model (400 epochs), continue from epoch 401-500 (constant LR) + 501-600 (decay) = 200 additional epochs
 
 ## Usage
 

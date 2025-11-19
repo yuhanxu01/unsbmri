@@ -136,11 +136,11 @@ class SBModel(BaseModel):
         self.real_B = self.real_B[:bs_per_gpu]
         self.forward()                     # compute fake images: G(A)
         if self.opt.isTrain:
-            
+
             self.compute_G_loss().backward()
             self.compute_D_loss().backward()
-            self.compute_E_loss().backward()  
-            if self.opt.lambda_NCE > 0.0:
+            self.compute_E_loss().backward()
+            if self.opt.lambda_NCE > 0.0 and not getattr(self.opt, 'disable_nce', False):
                 self.optimizer_F = torch.optim.Adam(self.netF.parameters(), lr=self.opt.lr, betas=(self.opt.beta1, self.opt.beta2))
                 self.optimizers.append(self.optimizer_F)
 

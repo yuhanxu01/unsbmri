@@ -32,7 +32,7 @@ export PYTHON_BIN="/gpfs/scratch/rl5285/miniconda3/envs/UNSB/bin/python3.8"
 export EXPERIMENT_NAME="ablation_exp5_twostage_10p_OT_input"
 
 # Training parameters
-export N_EPOCHS=100          # Train for 100 epochs with constant LR (401-500)
+export N_EPOCHS=500          # Keep constant LR until epoch 500
 export N_EPOCHS_DECAY=100    # Decay for 100 more epochs (501-600)
 export BATCH_SIZE=1
 
