@@ -148,33 +148,52 @@ class SBModel(BaseModel):
         # forward
         self.forward()
         self.netG.train()
-        self.netE.train()
-        self.netD.train()
-        self.netF.train()
+
+        # Only train networks that are being used
+        use_gan = self.opt.lambda_GAN > 0.0 and not getattr(self.opt, 'disable_gan', False)
+        use_nce = self.opt.lambda_NCE > 0.0 and not getattr(self.opt, 'disable_nce', False)
+        use_entropy = getattr(self.opt, 'use_entropy_loss', False) or (
+            self.opt.lambda_SB > 0.0 and
+            not getattr(self.opt, 'use_ot_input', False) and
+            not getattr(self.opt, 'use_ot_output', False)
+        )
+
+        if use_gan:
+            self.netD.train()
+        if use_entropy:
+            self.netE.train()
+        if use_nce:
+            self.netF.train()
+
         # update D
-        self.set_requires_grad(self.netD, True)
-        self.optimizer_D.zero_grad()
-        self.loss_D = self.compute_D_loss()
-        self.loss_D.backward()
-        self.optimizer_D.step()
-        
-        self.set_requires_grad(self.netE, True)
-        self.optimizer_E.zero_grad()
-        self.loss_E = self.compute_E_loss()
-        self.loss_E.backward()
-        self.optimizer_E.step()
+        if use_gan:
+            self.set_requires_grad(self.netD, True)
+            self.optimizer_D.zero_grad()
+            self.loss_D = self.compute_D_loss()
+            self.loss_D.backward()
+            self.optimizer_D.step()
+
+        # update E
+        if use_entropy:
+            self.set_requires_grad(self.netE, True)
+            self.optimizer_E.zero_grad()
+            self.loss_E = self.compute_E_loss()
+            self.loss_E.backward()
+            self.optimizer_E.step()
         
         # update G
-        self.set_requires_grad(self.netD, False)
-        self.set_requires_grad(self.netE, False)
-        
+        if use_gan:
+            self.set_requires_grad(self.netD, False)
+        if use_entropy:
+            self.set_requires_grad(self.netE, False)
+
         self.optimizer_G.zero_grad()
-        if self.opt.netF == 'mlp_sample':
+        if use_nce and self.opt.netF == 'mlp_sample':
             self.optimizer_F.zero_grad()
         self.loss_G = self.compute_G_loss()
         self.loss_G.backward()
         self.optimizer_G.step()
-        if self.opt.netF == 'mlp_sample':
+        if use_nce and self.opt.netF == 'mlp_sample':
             self.optimizer_F.step()       
         
     def set_input(self, input,input2=None):
