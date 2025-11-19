@@ -47,6 +47,14 @@ else
     echo "   ❌ FAIL: loss_NCE still using scalar 0.0"
     FAIL=1
 fi
+
+# Check critical OT_input gradient fix
+if grep -q "self.loss_OT_input = self.opt.tau \* torch.mean((self.real_A_noisy - self.fake_B)\*\*2)" models/sb_model.py; then
+    echo "   ✓ PASS: loss_OT_input uses fake_B (has gradient)"
+else
+    echo "   ❌ FAIL: loss_OT_input still uses real_B (no gradient!)"
+    FAIL=1
+fi
 echo ""
 
 # Check 3: Verify optimizer_F fix in data_dependent_initialize
