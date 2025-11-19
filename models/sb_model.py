@@ -295,30 +295,50 @@ class SBModel(BaseModel):
                     
     def compute_D_loss(self):
         """Calculate GAN loss for the discriminator"""
+        # Check if GAN is disabled
+        if getattr(self.opt, 'disable_gan', False):
+            self.loss_D = torch.tensor(0.0, device=self.real_A.device, requires_grad=True)
+            return self.loss_D
+
         bs =  self.real_A.size(0)
-        
+
         fake = self.fake_B.detach()
         std = torch.rand(size=[1]).item() * self.opt.std
-        
+
         pred_fake = self.netD(fake,self.time_idx)
         self.loss_D_fake = self.criterionGAN(pred_fake, False).mean()
         self.pred_real = self.netD(self.real_B,self.time_idx)
         loss_D_real = self.criterionGAN(self.pred_real, True)
         self.loss_D_real = loss_D_real.mean()
-        
+
         self.loss_D = (self.loss_D_fake + self.loss_D_real) * 0.5
         return self.loss_D
     def compute_E_loss(self):
-        
+
         bs =  self.real_A.size(0)
-        
-        """Calculate GAN loss for the discriminator"""
-        
+
+        """Calculate energy loss for the energy network"""
+
+        # Check if entropy loss is needed (only compute E loss if using entropy)
+        use_entropy_loss = getattr(self.opt, 'use_entropy_loss', False)
+        if not use_entropy_loss and getattr(self.opt, 'lambda_SB', 0.0) > 0.0:
+            # If not using ablation flags, use default behavior (always compute E loss)
+            use_ot_input = getattr(self.opt, 'use_ot_input', False)
+            use_ot_output = getattr(self.opt, 'use_ot_output', False)
+            # If no ablation flags are set, we're in normal mode, so compute E loss
+            if not (use_ot_input or use_ot_output):
+                use_entropy_loss = True
+
+        if not use_entropy_loss:
+            # If E is not needed, return zero tensor
+            self.loss_E = torch.tensor(0.0, device=self.real_A.device, requires_grad=True)
+            return self.loss_E
+
         XtXt_1 = torch.cat([self.real_A_noisy,self.fake_B.detach()], dim=1)
         XtXt_2 = torch.cat([self.real_A_noisy2,self.fake_B2.detach()], dim=1)
         temp = torch.logsumexp(self.netE(XtXt_1, self.time_idx, XtXt_2).reshape(-1), dim=0).mean()
         self.loss_E = -self.netE(XtXt_1, self.time_idx, XtXt_1).mean() +temp + temp**2
-        
+
         return self.loss_E
     def compute_G_loss(self):
         bs =  self.real_A.size(0)
@@ -333,14 +353,14 @@ class SBModel(BaseModel):
             pred_fake = self.netD(fake,self.time_idx)
             self.loss_G_GAN = self.criterionGAN(pred_fake, True).mean() * self.opt.lambda_GAN
         else:
-            self.loss_G_GAN = 0.0
+            self.loss_G_GAN = torch.tensor(0.0, device=self.real_A.device)
 
         # Schrödinger Bridge loss with modular components
-        self.loss_SB = 0
-        self.loss_SB_guidance = 0  # For scheme A
-        self.loss_OT_input = 0     # For ablation: real_A_noisy -> real_B
-        self.loss_OT_output = 0    # For ablation: fake_B -> real_B
-        self.loss_entropy = 0      # For ablation: ET_XY term
+        self.loss_SB = torch.tensor(0.0, device=self.real_A.device)
+        self.loss_SB_guidance = torch.tensor(0.0, device=self.real_A.device)  # For scheme A
+        self.loss_OT_input = torch.tensor(0.0, device=self.real_A.device)     # For ablation: real_A_noisy -> real_B
+        self.loss_OT_output = torch.tensor(0.0, device=self.real_A.device)    # For ablation: fake_B -> real_B
+        self.loss_entropy = torch.tensor(0.0, device=self.real_A.device)      # For ablation: ET_XY term
 
         if self.opt.lambda_SB > 0.0:
             # Check if using new ablation study parameters
@@ -390,7 +410,8 @@ class SBModel(BaseModel):
         if self.opt.lambda_NCE > 0.0 and not getattr(self.opt, 'disable_nce', False):
             self.loss_NCE = self.calculate_NCE_loss(self.real_A, fake)
         else:
-            self.loss_NCE, self.loss_NCE_bd = 0.0, 0.0
+            self.loss_NCE = torch.tensor(0.0, device=self.real_A.device)
+            self.loss_NCE_bd = torch.tensor(0.0, device=self.real_A.device)
 
         if self.opt.nce_idt and self.opt.lambda_NCE > 0.0 and not getattr(self.opt, 'disable_nce', False):
             self.loss_NCE_Y = self.calculate_NCE_loss(self.real_B, self.idt_B)
@@ -400,7 +421,7 @@ class SBModel(BaseModel):
 
         # Strategy-specific losses for paired training
         paired_strategy = getattr(self.opt, 'paired_strategy', 'none')
-        extra_loss = 0.0
+        extra_loss = torch.tensor(0.0, device=self.real_A.device)
         lambda_reg = getattr(self.opt, 'lambda_reg', 1.0)  # Default weight for B1-B5
 
         if getattr(self.opt, 'paired_stage', False):
