@@ -377,8 +377,8 @@ class SBModel(BaseModel):
         # Schrödinger Bridge loss with modular components
         self.loss_SB = torch.tensor(0.0, device=self.real_A.device)
         self.loss_SB_guidance = torch.tensor(0.0, device=self.real_A.device)  # For scheme A
-        self.loss_OT_input = torch.tensor(0.0, device=self.real_A.device)     # For ablation: real_A_noisy -> real_B
-        self.loss_OT_output = torch.tensor(0.0, device=self.real_A.device)    # For ablation: fake_B -> real_B
+        self.loss_OT_input = torch.tensor(0.0, device=self.real_A.device)     # For ablation: real_A_noisy -> fake_B (original SB OT term)
+        self.loss_OT_output = torch.tensor(0.0, device=self.real_A.device)    # For ablation: fake_B -> real_B (GT guidance)
         self.loss_entropy = torch.tensor(0.0, device=self.real_A.device)      # For ablation: ET_XY term
 
         if self.opt.lambda_SB > 0.0:
@@ -398,8 +398,9 @@ class SBModel(BaseModel):
                     self.loss_SB += self.loss_entropy
 
                 if use_ot_input:
-                    # OT input loss: push noisy input toward GT
-                    self.loss_OT_input = self.opt.tau * torch.mean((self.real_A_noisy - self.real_B)**2)
+                    # OT input loss: transport from noisy input to network output
+                    # This is the original SB optimal transport term
+                    self.loss_OT_input = self.opt.tau * torch.mean((self.real_A_noisy - self.fake_B)**2)
                     self.loss_SB += self.loss_OT_input
 
                 if use_ot_output:
