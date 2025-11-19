@@ -49,10 +49,18 @@ else
 fi
 
 # Check critical OT_input gradient fix
-if grep -q "self.loss_OT_input = self.opt.tau \* torch.mean((self.real_A_noisy - self.fake_B)\*\*2)" models/sb_model.py; then
-    echo "   ✓ PASS: loss_OT_input uses fake_B (has gradient)"
+if grep -q "self.loss_OT_input = self.opt.tau \* torch.mean((self.real_A_noisy - self.real_B)\*\*2)" models/sb_model.py; then
+    echo "   ✓ PASS: loss_OT_input uses real_B (supervises intermediate state)"
 else
-    echo "   ❌ FAIL: loss_OT_input still uses real_B (no gradient!)"
+    echo "   ❌ FAIL: loss_OT_input definition incorrect"
+    FAIL=1
+fi
+
+# Check gradient-enabled forward diffusion
+if grep -q "compute_noisy_with_grad = use_ot_input and self.opt.isTrain" models/sb_model.py; then
+    echo "   ✓ PASS: Gradient-enabled forward diffusion for OT_input"
+else
+    echo "   ❌ FAIL: Missing gradient-enabled forward diffusion"
     FAIL=1
 fi
 echo ""

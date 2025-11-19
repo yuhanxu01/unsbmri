@@ -212,7 +212,7 @@ class SBModel(BaseModel):
         self.image_paths = input['A_paths' if AtoB else 'B_paths']
 
     def forward(self):
-        
+
         tau = self.opt.tau
         T = self.opt.num_timesteps
         incs = np.array([0] + [1/(i+1) for i in range(T-1)])
@@ -226,39 +226,89 @@ class SBModel(BaseModel):
         time_idx = (torch.randint(T, size=[1]).cuda() * torch.ones(size=[1]).cuda()).long()
         self.time_idx = time_idx
         self.timestep     = times[time_idx]
-        
-        with torch.no_grad():
-            self.netG.eval()
+
+        # Check if we need gradient for real_A_noisy (for OT_input experiments)
+        use_ot_input = getattr(self.opt, 'use_ot_input', False)
+        compute_noisy_with_grad = use_ot_input and self.opt.isTrain
+
+        # Forward diffusion to generate noisy states
+        # Use gradient-enabled version only for OT_input experiments
+        if compute_noisy_with_grad:
+            # Gradient-enabled version (for OT_input loss)
+            # This allows (real_A_noisy - real_B)^2 to have gradient
+            self.netG.train()  # Keep in train mode to preserve gradients
+
+            Xt = self.real_A
+            Xt2 = self.real_A2
+            if self.opt.nce_idt:
+                XtB = self.real_B
+
             for t in range(self.time_idx.int().item()+1):
-                
                 if t > 0:
                     delta = times[t] - times[t-1]
                     denom = times[-1] - times[t-1]
                     inter = (delta / denom).reshape(-1,1,1,1)
                     scale = (delta * (1 - delta / denom)).reshape(-1,1,1,1)
-                Xt       = self.real_A if (t == 0) else (1-inter) * Xt + inter * Xt_1.detach() + (scale * tau).sqrt() * torch.randn_like(Xt).to(self.real_A.device)
-                time_idx = (t * torch.ones(size=[self.real_A.shape[0]]).to(self.real_A.device)).long()
-                time     = times[time_idx]
-                z        = torch.randn(size=[self.real_A.shape[0],4*self.opt.ngf]).to(self.real_A.device)
-                Xt_1     = self.netG(Xt, time_idx, z)
-                
-                Xt2       = self.real_A2 if (t == 0) else (1-inter) * Xt2 + inter * Xt_12.detach() + (scale * tau).sqrt() * torch.randn_like(Xt2).to(self.real_A.device)
-                time_idx = (t * torch.ones(size=[self.real_A.shape[0]]).to(self.real_A.device)).long()
-                time     = times[time_idx]
-                z        = torch.randn(size=[self.real_A.shape[0],4*self.opt.ngf]).to(self.real_A.device)
-                Xt_12    = self.netG(Xt2, time_idx, z)
-                
-                
+
+                if t > 0:
+                    # Don't detach - keep gradients!
+                    # Use stop_gradient on previous state to save memory
+                    Xt = (1-inter) * Xt.detach() + inter * Xt_1 + (scale * tau).sqrt() * torch.randn_like(Xt).to(self.real_A.device)
+                    Xt2 = (1-inter) * Xt2.detach() + inter * Xt_12 + (scale * tau).sqrt() * torch.randn_like(Xt2).to(self.real_A.device)
+                    if self.opt.nce_idt:
+                        XtB = (1-inter) * XtB.detach() + inter * Xt_1B + (scale * tau).sqrt() * torch.randn_like(XtB).to(self.real_A.device)
+
+                time_idx_t = (t * torch.ones(size=[self.real_A.shape[0]]).to(self.real_A.device)).long()
+                z = torch.randn(size=[self.real_A.shape[0],4*self.opt.ngf]).to(self.real_A.device)
+
+                Xt_1 = self.netG(Xt, time_idx_t, z)
+
+                z2 = torch.randn(size=[self.real_A.shape[0],4*self.opt.ngf]).to(self.real_A.device)
+                Xt_12 = self.netG(Xt2, time_idx_t, z2)
+
                 if self.opt.nce_idt:
-                    XtB = self.real_B if (t == 0) else (1-inter) * XtB + inter * Xt_1B.detach() + (scale * tau).sqrt() * torch.randn_like(XtB).to(self.real_A.device)
+                    zB = torch.randn(size=[self.real_A.shape[0],4*self.opt.ngf]).to(self.real_A.device)
+                    Xt_1B = self.netG(XtB, time_idx_t, zB)
+
+            # Keep gradient for OT_input loss
+            self.real_A_noisy = Xt
+            self.real_A_noisy2 = Xt2
+            if self.opt.nce_idt:
+                self.XtB = XtB
+        else:
+            # Original no_grad version (for OT_output and entropy experiments)
+            with torch.no_grad():
+                self.netG.eval()
+                for t in range(self.time_idx.int().item()+1):
+
+                    if t > 0:
+                        delta = times[t] - times[t-1]
+                        denom = times[-1] - times[t-1]
+                        inter = (delta / denom).reshape(-1,1,1,1)
+                        scale = (delta * (1 - delta / denom)).reshape(-1,1,1,1)
+                    Xt       = self.real_A if (t == 0) else (1-inter) * Xt + inter * Xt_1.detach() + (scale * tau).sqrt() * torch.randn_like(Xt).to(self.real_A.device)
                     time_idx = (t * torch.ones(size=[self.real_A.shape[0]]).to(self.real_A.device)).long()
                     time     = times[time_idx]
                     z        = torch.randn(size=[self.real_A.shape[0],4*self.opt.ngf]).to(self.real_A.device)
-                    Xt_1B = self.netG(XtB, time_idx, z)
-            if self.opt.nce_idt:
-                self.XtB = XtB.detach()
-            self.real_A_noisy = Xt.detach()
-            self.real_A_noisy2 = Xt2.detach()
+                    Xt_1     = self.netG(Xt, time_idx, z)
+
+                    Xt2       = self.real_A2 if (t == 0) else (1-inter) * Xt2 + inter * Xt_12.detach() + (scale * tau).sqrt() * torch.randn_like(Xt2).to(self.real_A.device)
+                    time_idx = (t * torch.ones(size=[self.real_A.shape[0]]).to(self.real_A.device)).long()
+                    time     = times[time_idx]
+                    z        = torch.randn(size=[self.real_A.shape[0],4*self.opt.ngf]).to(self.real_A.device)
+                    Xt_12    = self.netG(Xt2, time_idx, z)
+
+
+                    if self.opt.nce_idt:
+                        XtB = self.real_B if (t == 0) else (1-inter) * XtB + inter * Xt_1B.detach() + (scale * tau).sqrt() * torch.randn_like(XtB).to(self.real_A.device)
+                        time_idx = (t * torch.ones(size=[self.real_A.shape[0]]).to(self.real_A.device)).long()
+                        time     = times[time_idx]
+                        z        = torch.randn(size=[self.real_A.shape[0],4*self.opt.ngf]).to(self.real_A.device)
+                        Xt_1B = self.netG(XtB, time_idx, z)
+                if self.opt.nce_idt:
+                    self.XtB = XtB.detach()
+                self.real_A_noisy = Xt.detach()
+                self.real_A_noisy2 = Xt2.detach()
                       
         
         z_in    = torch.randn(size=[2*bs,4*self.opt.ngf]).to(self.real_A.device)
@@ -377,9 +427,9 @@ class SBModel(BaseModel):
         # Schrödinger Bridge loss with modular components
         self.loss_SB = torch.tensor(0.0, device=self.real_A.device)
         self.loss_SB_guidance = torch.tensor(0.0, device=self.real_A.device)  # For scheme A
-        self.loss_OT_input = torch.tensor(0.0, device=self.real_A.device)     # For ablation: real_A_noisy -> fake_B (original SB OT term)
-        self.loss_OT_output = torch.tensor(0.0, device=self.real_A.device)    # For ablation: fake_B -> real_B (GT guidance)
-        self.loss_entropy = torch.tensor(0.0, device=self.real_A.device)      # For ablation: ET_XY term
+        self.loss_OT_input = torch.tensor(0.0, device=self.real_A.device)     # For ablation: real_A_noisy -> real_B (supervise intermediate state)
+        self.loss_OT_output = torch.tensor(0.0, device=self.real_A.device)    # For ablation: fake_B -> real_B (supervise final output)
+        self.loss_entropy = torch.tensor(0.0, device=self.real_A.device)      # For ablation: ET_XY term (energy regularization)
 
         if self.opt.lambda_SB > 0.0:
             # Check if using new ablation study parameters
@@ -398,9 +448,10 @@ class SBModel(BaseModel):
                     self.loss_SB += self.loss_entropy
 
                 if use_ot_input:
-                    # OT input loss: transport from noisy input to network output
-                    # This is the original SB optimal transport term
-                    self.loss_OT_input = self.opt.tau * torch.mean((self.real_A_noisy - self.fake_B)**2)
+                    # OT input loss: directly constrain noisy state to GT
+                    # real_A_noisy is computed with gradient in forward() when use_ot_input=True
+                    # This supervises the intermediate diffusion state directly
+                    self.loss_OT_input = self.opt.tau * torch.mean((self.real_A_noisy - self.real_B)**2)
                     self.loss_SB += self.loss_OT_input
 
                 if use_ot_output:

@@ -5,12 +5,18 @@ This directory contains 12 ablation study experiments to systematically evaluate
 ## Overview
 
 The experiments test two types of Optimal Transport (OT) losses:
-- **OT_input**: `tau * mean((real_A_noisy - real_B)^2)` - Push noisy input directly toward ground truth
-- **OT_output**: `tau * mean((fake_B - real_B)^2)` - Push generated output toward ground truth
+- **OT_input**: `tau * mean((real_A_noisy - real_B)^2)` - Supervise intermediate diffusion state to GT
+  - `real_A_noisy` is computed with gradient when `use_ot_input=True`
+  - Directly constrains the forward diffusion process
+- **OT_output**: `tau * mean((fake_B - real_B)^2)` - Supervise final network output to GT
+  - `fake_B` is the final output from the diffusion process
+  - Standard supervised learning on output
 
 Combined with:
-- **Entropy loss**: `ET_XY` term from Schrödinger Bridge formulation
+- **Entropy loss**: `ET_XY` term from Schrödinger Bridge formulation (energy-based regularization)
 - **No entropy**: OT loss only
+
+**Key insight**: OT_input supervises the *intermediate state* (real_A_noisy), while OT_output supervises the *final output* (fake_B).
 
 All experiments disable GAN and NCE losses to isolate the effect of OT and entropy components.
 
