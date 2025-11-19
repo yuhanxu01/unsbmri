@@ -53,6 +53,14 @@ class SBModel(BaseModel):
         # The training/test scripts will call <BaseModel.get_current_losses>
         self.loss_names = ['G_GAN', 'D_real', 'D_fake', 'G', 'NCE','SB']
 
+        # Add ablation study loss components
+        if getattr(opt, 'use_ot_input', False):
+            self.loss_names.append('OT_input')
+        if getattr(opt, 'use_ot_output', False):
+            self.loss_names.append('OT_output')
+        if getattr(opt, 'use_entropy_loss', False):
+            self.loss_names.append('entropy')
+
         # Add strategy-specific losses
         paired_strategy = getattr(opt, 'paired_strategy', 'none')
         if getattr(opt, 'paired_stage', False):
@@ -320,37 +328,71 @@ class SBModel(BaseModel):
         fake = self.fake_B
         std = torch.rand(size=[1]).item() * self.opt.std
         
-        if self.opt.lambda_GAN > 0.0:
+        # GAN loss (can be disabled for ablation studies)
+        if self.opt.lambda_GAN > 0.0 and not getattr(self.opt, 'disable_gan', False):
             pred_fake = self.netD(fake,self.time_idx)
             self.loss_G_GAN = self.criterionGAN(pred_fake, True).mean() * self.opt.lambda_GAN
         else:
             self.loss_G_GAN = 0.0
+
+        # Schrödinger Bridge loss with modular components
         self.loss_SB = 0
         self.loss_SB_guidance = 0  # For scheme A
+        self.loss_OT_input = 0     # For ablation: real_A_noisy -> real_B
+        self.loss_OT_output = 0    # For ablation: fake_B -> real_B
+        self.loss_entropy = 0      # For ablation: ET_XY term
 
         if self.opt.lambda_SB > 0.0:
-            XtXt_1 = torch.cat([self.real_A_noisy, self.fake_B], dim=1)
-            XtXt_2 = torch.cat([self.real_A_noisy2, self.fake_B2], dim=1)
+            # Check if using new ablation study parameters
+            use_ot_input = getattr(self.opt, 'use_ot_input', False)
+            use_ot_output = getattr(self.opt, 'use_ot_output', False)
+            use_entropy_loss = getattr(self.opt, 'use_entropy_loss', False)
 
-            bs = self.opt.batch_size
+            # If any ablation flag is set, use new modular loss computation
+            if use_ot_input or use_ot_output or use_entropy_loss:
+                # Modular loss computation for ablation studies
+                if use_entropy_loss:
+                    XtXt_1 = torch.cat([self.real_A_noisy, self.fake_B], dim=1)
+                    XtXt_2 = torch.cat([self.real_A_noisy2, self.fake_B2], dim=1)
+                    ET_XY = self.netE(XtXt_1, self.time_idx, XtXt_1).mean() - torch.logsumexp(self.netE(XtXt_1, self.time_idx, XtXt_2).reshape(-1), dim=0)
+                    self.loss_entropy = -(self.opt.num_timesteps-self.time_idx[0])/self.opt.num_timesteps*self.opt.tau*ET_XY
+                    self.loss_SB += self.loss_entropy
 
-            ET_XY    = self.netE(XtXt_1, self.time_idx, XtXt_1).mean() - torch.logsumexp(self.netE(XtXt_1, self.time_idx, XtXt_2).reshape(-1), dim=0)
-            self.loss_SB = -(self.opt.num_timesteps-self.time_idx[0])/self.opt.num_timesteps*self.opt.tau*ET_XY
-            self.loss_SB += self.opt.tau*torch.mean((self.real_A_noisy-self.fake_B)**2)
+                if use_ot_input:
+                    # OT input loss: push noisy input toward GT
+                    self.loss_OT_input = self.opt.tau * torch.mean((self.real_A_noisy - self.real_B)**2)
+                    self.loss_SB += self.loss_OT_input
 
-            # Scheme A: Use GT to guide transport in SB framework
-            paired_strategy = getattr(self.opt, 'paired_strategy', 'none')
-            if getattr(self.opt, 'paired_stage', False) and paired_strategy == 'sb_gt_transport':
-                # Add GT guidance term in the form of transport cost
-                # This guides fake_B toward real_B while maintaining SB's mathematical structure
-                self.loss_SB_guidance = self.opt.tau * torch.mean((self.fake_B - self.real_B)**2)
-                self.loss_SB += self.loss_SB_guidance
-        if self.opt.lambda_NCE > 0.0:
+                if use_ot_output:
+                    # OT output loss: push generated output toward GT
+                    self.loss_OT_output = self.opt.tau * torch.mean((self.fake_B - self.real_B)**2)
+                    self.loss_SB += self.loss_OT_output
+
+            else:
+                # Original SB loss computation (default behavior)
+                XtXt_1 = torch.cat([self.real_A_noisy, self.fake_B], dim=1)
+                XtXt_2 = torch.cat([self.real_A_noisy2, self.fake_B2], dim=1)
+
+                bs = self.opt.batch_size
+
+                ET_XY    = self.netE(XtXt_1, self.time_idx, XtXt_1).mean() - torch.logsumexp(self.netE(XtXt_1, self.time_idx, XtXt_2).reshape(-1), dim=0)
+                self.loss_SB = -(self.opt.num_timesteps-self.time_idx[0])/self.opt.num_timesteps*self.opt.tau*ET_XY
+                self.loss_SB += self.opt.tau*torch.mean((self.real_A_noisy-self.fake_B)**2)
+
+                # Scheme A: Use GT to guide transport in SB framework
+                paired_strategy = getattr(self.opt, 'paired_strategy', 'none')
+                if getattr(self.opt, 'paired_stage', False) and paired_strategy == 'sb_gt_transport':
+                    # Add GT guidance term in the form of transport cost
+                    # This guides fake_B toward real_B while maintaining SB's mathematical structure
+                    self.loss_SB_guidance = self.opt.tau * torch.mean((self.fake_B - self.real_B)**2)
+                    self.loss_SB += self.loss_SB_guidance
+        # NCE loss (can be disabled for ablation studies)
+        if self.opt.lambda_NCE > 0.0 and not getattr(self.opt, 'disable_nce', False):
             self.loss_NCE = self.calculate_NCE_loss(self.real_A, fake)
         else:
             self.loss_NCE, self.loss_NCE_bd = 0.0, 0.0
 
-        if self.opt.nce_idt and self.opt.lambda_NCE > 0.0:
+        if self.opt.nce_idt and self.opt.lambda_NCE > 0.0 and not getattr(self.opt, 'disable_nce', False):
             self.loss_NCE_Y = self.calculate_NCE_loss(self.real_B, self.idt_B)
             loss_NCE_both = (self.loss_NCE + self.loss_NCE_Y) * 0.5
         else:

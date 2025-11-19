@@ -29,6 +29,13 @@ PAIRED_SUBSET_RATIO=${PAIRED_SUBSET_RATIO:-1.0}
 PAIRED_SUBSET_SEED=${PAIRED_SUBSET_SEED:-42}
 COMPUTE_METRICS=${COMPUTE_METRICS:-""}  # Set to "--compute_paired_metrics" to enable
 
+# Ablation study loss control
+USE_OT_INPUT=${USE_OT_INPUT:-""}  # Set to "--use_ot_input" to enable
+USE_OT_OUTPUT=${USE_OT_OUTPUT:-""}  # Set to "--use_ot_output" to enable
+USE_ENTROPY=${USE_ENTROPY:-""}  # Set to "--use_entropy_loss" to enable
+DISABLE_GAN=${DISABLE_GAN:-""}  # Set to "--disable_gan" to disable GAN loss
+DISABLE_NCE=${DISABLE_NCE:-""}  # Set to "--disable_nce" to disable NCE loss
+
 # Resume training
 CONTINUE_TRAIN=${CONTINUE_TRAIN:-""}  # Set to "--continue_train" to enable
 PRETRAINED_NAME=${PRETRAINED_NAME:-""}
@@ -78,7 +85,12 @@ CMD="$PYTHON_BIN train.py \
   --mode sb \
   $PAIRED_STAGE \
   $COMPUTE_METRICS \
-  $CONTINUE_TRAIN"
+  $CONTINUE_TRAIN \
+  $USE_OT_INPUT \
+  $USE_OT_OUTPUT \
+  $USE_ENTROPY \
+  $DISABLE_GAN \
+  $DISABLE_NCE"
 
 # Add pretrained model if specified
 if [ -n "$PRETRAINED_NAME" ]; then
